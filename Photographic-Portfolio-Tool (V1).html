@@ -1,0 +1,1967 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Photographs</title>
+<style>
+  :root {
+    --bg: #23262C;
+    --silk: rgba(236, 231, 220, 0.42);
+    --silk-strong: rgba(236, 231, 220, 0.7);
+    --ink: #ECE7DC;
+    --ink-soft: rgba(236, 231, 220, 0.6);
+    --amber: #D6B26E;
+    --warn: #E4876C;
+    --panel: rgba(35, 38, 44, 0.88);
+    --field: #1B1D22;
+    --dim: rgba(20, 22, 26, 0.94);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    overflow: hidden; -webkit-user-select: none; user-select: none;
+  }
+  body.grid-view { overflow-y: auto; }
+
+  /* ---------- Web view ---------- */
+  /* The viewport is the fixed, full-screen input surface; the world inside it is unbounded and carries the transform */
+  #viewport { position: fixed; inset: 0; overflow: hidden; cursor: grab; touch-action: none; }
+  #viewport.panning { cursor: grabbing; }
+  #world { position: absolute; inset: 0; transform-origin: 0 0; overflow: visible; }
+  #web { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+  #web line, #web circle, #web path { stroke: var(--silk); stroke-width: 1.3; fill: none; vector-effect: non-scaling-stroke; }
+  #web line.spoke { stroke-width: 0.9; }
+  #web path.ring { stroke-width: 1; opacity: 0.55; }
+  #web circle.orb { stroke-width: 0.6; opacity: 0.35; stroke-dasharray: 4 6; }
+  body.grid-view #viewport, body.grid-view .web-only { display: none; }
+
+  /* The hub: a disc at the centre of the web that carries the collection's title */
+  #hub {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    width: 220px; height: 220px; border-radius: 50%; padding: 24px;
+    border: 1px solid var(--silk-strong); background: var(--bg);
+    box-shadow: 0 0 0 6px var(--bg), 0 18px 40px rgba(0,0,0,0.35);
+    display: grid; place-items: center; text-align: center; pointer-events: none;
+  }
+  #hub h1.title { font-size: clamp(17px, 1.6vw, 24px); line-height: 1.2; overflow-wrap: anywhere; max-width: 100%; }
+  #hub p { margin: 8px 0 0; font-size: 13px; color: var(--ink-soft); font-style: italic; }
+  #hub p.hidden { display: none; }
+  body:not(.viewing):not(.published) #hub h1.title:hover { border-bottom: 1px dashed var(--silk-strong); }
+
+  h1.title {
+    margin: 0; font-weight: 400; font-size: clamp(22px, 3vw, 34px); letter-spacing: 0.02em; color: var(--ink);
+    outline: none;
+  }
+  body:not(.viewing):not(.published) h1.title { pointer-events: auto; cursor: text; -webkit-user-select: text; user-select: text; }
+  body:not(.viewing):not(.published) h1.title:focus { border-bottom: 1px dashed var(--amber); }
+
+  .photo {
+    position: absolute; transform-origin: center; cursor: grab; touch-action: none; background: #000;
+    box-shadow: 0 18px 40px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.3); transition: box-shadow 160ms ease;
+  }
+  .photo.dragging { cursor: grabbing; box-shadow: 0 30px 60px rgba(0,0,0,0.6); z-index: 50; }
+  .photo.selected, .tile.selected { outline: 1.5px solid var(--amber); outline-offset: 4px; }
+  .photo img { display: block; width: 100%; height: auto; pointer-events: none; }
+  body.viewing .photo { cursor: zoom-in; }
+  .photo.locked { cursor: default; }
+  #marquee { position: fixed; border: 1px dashed var(--amber); background: rgba(214,178,110,0.10); display: none; pointer-events: none; z-index: 60; }
+  #marquee.show { display: block; }
+
+  /* ---------- Zones: named, coloured polygon regions of the web ---------- */
+  #zones { position: absolute; inset: 0; pointer-events: none; }
+  body:not(.zones-on) #zones, body:not(.zones-on) #zone-labels, body:not(.zones-on) #zone-handles { display: none !important; }
+  #zone-labels { position: absolute; inset: 0; pointer-events: none; z-index: 1001; } /* above photos and the overlap overlay */
+  #zone-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  #zone-svg polygon { fill: var(--zc); fill-opacity: 0.09; stroke: var(--zc); stroke-width: 1.5; stroke-dasharray: 7 5; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+  body.zones-on:not(.viewing):not(.published) #zone-svg polygon { pointer-events: auto; cursor: move; }
+  #zone-svg g.sel polygon { stroke-dasharray: none; stroke-width: 2.5; fill-opacity: 0.14; }
+  #zone-handles { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 1002; display: none; }
+  body.zones-on:not(.viewing):not(.published) #zone-handles { display: block; }
+  #zone-handles circle.vtx { fill: var(--zc); stroke: var(--bg); stroke-width: 2; cursor: grab; pointer-events: auto; }
+  #zone-handles circle.vtx:hover { stroke: var(--ink); }
+  #zone-handles circle.vtx.dragging { cursor: grabbing; }
+  #zone-svg .draft polyline, #zone-svg .draft line { fill: none; stroke: var(--amber); stroke-width: 1.5; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
+  #zone-svg .draft circle { fill: var(--amber); stroke: var(--bg); stroke-width: 2; }
+  #zone-svg .draft circle.first { fill: var(--bg); stroke: var(--amber); }
+  .zone-label { position: absolute; transform: translate(-50%, -50%); font-size: var(--zone-text, 16px); }
+  .zone-label .zpill {
+    padding: 0.3em 1em; border-radius: 999px; letter-spacing: 0.02em; white-space: nowrap;
+    background: var(--bg); border: 1.5px solid var(--zc); color: var(--ink);
+  }
+  body.zones-on:not(.viewing):not(.published) .zone-label { pointer-events: auto; }
+  .zone-label .zname { outline: none; min-width: 2ch; }
+  body:not(.viewing):not(.published) .zone-label .zname { cursor: text; }
+  /* Editing tools sit under the name so the name itself never shifts */
+  .zone-label .ztools {
+    position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); display: none; align-items: center; gap: 6px;
+    padding: 5px 8px; font-size: 13px; white-space: nowrap; background: var(--panel); border: 1px solid var(--silk); border-radius: 999px; backdrop-filter: blur(6px);
+  }
+  body.zones-on:not(.viewing):not(.published) .zone-label:hover .ztools, .zone-label:focus-within .ztools { display: flex; }
+  .zone-label .ztools::before { content: ''; position: absolute; left: 0; right: 0; top: -8px; height: 8px; } /* keeps hover alive across the gap */
+  .zone-label .zctl { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-soft); }
+  .zone-label .zctl output { min-width: 4ch; font-variant-numeric: tabular-nums; }
+  .zone-label .zsize, .zone-label .zrot { width: 80px; accent-color: var(--zc); cursor: pointer; }
+  .zone-label .zpill { transform-origin: center; }
+  body.zones-on:not(.viewing):not(.published) .zone-label:not(.locked) .zpill { cursor: grab; }
+  .zone-label.locked .zpill { box-shadow: inset 0 0 0 1px var(--zc); }
+  .zone-label.dragging, .zone-label.dragging .zpill { cursor: grabbing; }
+  .zone-label input[type=color] { width: 22px; height: 22px; padding: 0; border: 1px solid var(--silk-strong); border-radius: 50%; background: transparent; cursor: pointer; }
+  .zone-label input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
+  .zone-label input[type=color]::-webkit-color-swatch { border: none; border-radius: 50%; }
+  .zone-label button { height: 22px; border-radius: 999px; border: 1px solid var(--silk-strong); background: transparent; color: var(--ink); font: 12px/1 inherit; cursor: pointer; padding: 0 8px; }
+  .zone-label button.zdel { width: 22px; padding: 0; }
+  .zone-label button:hover { border-color: var(--amber); color: var(--amber); }
+  body.zone-draw #viewport { cursor: crosshair; }
+  #zone-tip { position: fixed; left: 50%; top: 18px; transform: translateX(-50%); z-index: 96; display: none; padding: 8px 14px; font-size: 13px; background: var(--panel); border: 1px solid var(--amber); backdrop-filter: blur(8px); }
+  body.zone-draw #zone-tip { display: block; }
+  .badge {
+    position: absolute; left: -8px; top: -8px; padding: 2px 7px; border-radius: 999px; font-size: 11px;
+    background: var(--panel); border: 1px solid var(--silk-strong); color: var(--ink); backdrop-filter: blur(6px); z-index: 2;
+  }
+  body.viewing .badge { display: none; }
+  .photo .badge.cover { display: none; }
+  #overlay { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 1000; }
+  #overlay polygon { fill: rgba(228,135,108,0.16); stroke: var(--warn); stroke-width: 2; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; }
+  #overlay polygon.hidden-fully { fill: rgba(228,135,108,0.32); }
+  #overlay text { fill: var(--warn); font: italic 12px "Iowan Old Style", Palatino, Georgia, serif; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
+  .photo .badge.lock { display: none; }
+  .photo.locked .badge.lock { display: block; }
+
+  /* ---------- Layers panel ---------- */
+  #layers {
+    position: fixed; right: 20px; top: 20px; bottom: 96px; width: 250px; z-index: 90; display: none; flex-direction: column;
+    background: var(--panel); border: 1px solid var(--silk); backdrop-filter: blur(8px);
+  }
+  body.layers-open:not(.viewing):not(.published):not(.grid-view) #layers { display: flex; }
+  body.layers-open:not(.viewing):not(.published):not(.grid-view) #hint { display: none; }
+  #layers header { padding: 10px 14px; font-size: 14px; border-bottom: 1px solid var(--silk); display: flex; justify-content: space-between; align-items: center; }
+  #layers header span:last-child { color: var(--ink-soft); font-size: 12px; font-style: italic; }
+  #layer-list { overflow-y: auto; flex: 1; padding: 6px; }
+  .lrow {
+    display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 4px; cursor: grab; border-top: 2px solid transparent;
+  }
+  .lrow:hover { background: rgba(236,231,220,0.06); }
+  .lrow.selected { background: rgba(214,178,110,0.14); box-shadow: inset 0 0 0 1px var(--amber); }
+  .lrow.over { border-top-color: var(--amber); }
+  .lrow.ghost { opacity: 0.35; }
+  .lrow.covered .lname { color: var(--warn); }
+  .lrow img { width: 44px; height: 33px; object-fit: cover; flex: none; background: #000; }
+  .lrow .lname { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lrow .llock { border: none; background: transparent; color: var(--ink-soft); cursor: pointer; font-size: 14px; padding: 2px 4px; }
+  .lrow .llock.on { color: var(--amber); }
+  .lrow .llock:hover { color: var(--amber); }
+  #layers p.empty { padding: 20px 14px; font-size: 13px; color: var(--ink-soft); font-style: italic; }
+  #bar button.on { color: var(--amber); }
+
+  /* ---------- Theme popover ---------- */
+  #theme {
+    position: fixed; left: 20px; bottom: 84px; z-index: 95; display: none; flex-direction: column; gap: 10px; width: 300px;
+    padding: 14px 16px; background: var(--panel); border: 1px solid var(--silk); backdrop-filter: blur(8px); font-size: 14px;
+  }
+  #theme.open { display: flex; }
+  #theme .trow { display: flex; align-items: center; gap: 10px; }
+  #theme .trow > span:first-child { width: 9ch; color: var(--ink-soft); }
+  #theme input[type=color] { width: 44px; height: 28px; border: 1px solid var(--silk); background: transparent; padding: 0; cursor: pointer; }
+  #theme input[type=range] { flex: 1; accent-color: var(--amber); }
+  #theme .swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+  #theme .swatch { width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--silk-strong); cursor: pointer; }
+  #theme .swatch:hover { outline: 2px solid var(--amber); outline-offset: 2px; }
+  #theme label.auto { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; }
+  #theme label.auto input { accent-color: var(--amber); }
+  #theme button.reset { border: 1px solid var(--silk-strong); background: transparent; color: var(--ink); font: 13px inherit; padding: 4px 10px; cursor: pointer; align-self: flex-start; }
+  #theme button.reset:hover { border-color: var(--amber); color: var(--amber); }
+  #sizer.locked input, #sizer.locked button:not(#lock-toggle):not(.layer-btn) { opacity: 0.35; pointer-events: none; }
+
+  .ctl { position: absolute; top: -14px; right: -14px; display: none; gap: 6px; z-index: 2; }
+  .photo:hover .ctl, .photo.selected .ctl, .tile:hover .ctl, .tile.selected .ctl { display: flex; }
+  body.viewing .ctl { display: none !important; }
+  .ctl button {
+    width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--silk-strong);
+    background: var(--panel); color: var(--ink); font: 15px/1 inherit; cursor: pointer;
+    display: grid; place-items: center; backdrop-filter: blur(6px);
+  }
+  .ctl button:hover { border-color: var(--amber); color: var(--amber); }
+  .ctl button:focus-visible { outline: 2px solid var(--amber); }
+
+  /* ---------- Grid view ---------- */
+  #gallery { display: none; padding: 48px clamp(16px, 4vw, 64px) 120px; max-width: 1100px; margin: 0 auto; }
+  body.grid-view #gallery { display: block; }
+  #gallery header { margin-bottom: 32px; }
+  #gallery header p { margin: 6px 0 0; font-size: 14px; color: var(--ink-soft); font-style: italic; }
+  #grid { --gap: 14px; }
+  #grid .row { display: flex; gap: var(--gap); margin-bottom: var(--gap); }
+  #grid .row:last-child { margin-bottom: 0; }
+  #grid .zone-head {
+    display: flex; align-items: baseline; gap: 12px; margin: 36px 0 14px; font-weight: 400; font-size: 20px; letter-spacing: 0.02em;
+    padding-bottom: 8px; border-bottom: 1.5px dashed var(--zc, var(--silk)); color: var(--ink);
+  }
+  #grid .zone-head:first-child { margin-top: 0; }
+  #grid .zone-head small { font-size: 13px; color: var(--ink-soft); }
+  #grid .zone-head.other { --zc: var(--silk); }
+  .tile { position: relative; flex: 0 0 auto; background: #000; cursor: grab; }
+  .tile img { width: 100%; height: 100%; display: block; pointer-events: none; }
+  .tile.over { outline: 1.5px dashed var(--amber); outline-offset: 4px; }
+  .tile.ghost { opacity: 0.35; }
+  body.viewing .tile { cursor: zoom-in; }
+  @media (max-width: 700px) { #grid { --gap: 8px; } }
+
+  /* ---------- Toolbar ---------- */
+  #bar {
+    position: fixed; left: 20px; bottom: 20px; display: flex; gap: 4px; flex-wrap: wrap; z-index: 90;
+    padding: 6px; background: var(--panel); border: 1px solid var(--silk); backdrop-filter: blur(8px); border-radius: 999px;
+  }
+  #bar button, #bar label {
+    border: none; background: transparent; color: var(--ink); font: 14px inherit;
+    padding: 6px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap;
+  }
+  #bar button:hover, #bar label:hover { background: rgba(236,231,220,0.08); }
+  #bar button:focus-visible, #bar label:focus-within { outline: 2px solid var(--amber); }
+  #bar .primary { color: var(--amber); }
+  #bar button:disabled { opacity: 0.35; cursor: default; }
+  #bar-hide { color: var(--ink-soft); }
+  #bar-show {
+    position: fixed; left: 20px; bottom: 20px; z-index: 90; display: none; padding: 6px 14px; border-radius: 999px; cursor: pointer;
+    background: var(--panel); border: 1px solid var(--silk); color: var(--ink-soft); font: 13px inherit; backdrop-filter: blur(8px);
+  }
+  #bar-show:hover { color: var(--ink); }
+  body.bar-hidden #bar, body.bar-hidden #hint, body.bar-hidden #sizer, body.bar-hidden #grid-sizer, body.bar-hidden #theme, body.bar-hidden #layers { display: none !important; }
+  body.bar-hidden #bar-show { display: block; }
+  #bar .menu-wrap { position: relative; }
+  #bar .menu {
+    position: absolute; left: 0; bottom: calc(100% + 10px); display: none; flex-direction: column; min-width: 240px; padding: 6px;
+    background: var(--panel); border: 1px solid var(--silk); backdrop-filter: blur(8px); border-radius: 12px;
+  }
+  #bar .menu.open { display: flex; }
+  #bar .menu button { text-align: left; border-radius: 8px; white-space: nowrap; }
+  body.published #zone-draw-btn, body.viewing #zone-draw-btn, body.grid-view #zone-draw-btn { display: none; }
+  #bar button:disabled:hover { background: transparent; }
+  #bar .sep { width: 1px; background: var(--silk); margin: 4px 4px; }
+  #bar input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  body.published #bar .edit-only { display: none; }
+  #bar .zoom { padding: 6px 10px; font-size: 16px; line-height: 1; }
+
+  /* ---------- Size slider (shown while a photo is selected in the web view) ---------- */
+  #sizer {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 90;
+    display: none; flex-direction: column; gap: 8px; padding: 10px 18px;
+    background: var(--panel); border: 1px solid var(--silk); border-radius: 18px; backdrop-filter: blur(8px);
+    font-size: 14px;
+  }
+  #sizer.show { display: flex; }
+  #sizer .ctl-row { display: flex; align-items: center; gap: 12px; }
+  #sizer .ctl-row > span:first-child { width: 4ch; }
+  #sizer button {
+    border: 1px solid var(--silk-strong); background: transparent; color: var(--ink); font: 13px inherit;
+    padding: 4px 10px; border-radius: 999px; cursor: pointer; white-space: nowrap;
+  }
+  #sizer button:hover { border-color: var(--amber); color: var(--amber); }
+  #sizer { width: min(760px, 94vw); }
+  #sizer input[type=number] {
+    width: 7ch; background: var(--field); color: var(--ink); border: 1px solid var(--silk); padding: 3px 6px; font: 13px inherit;
+  }
+  body.viewing #sizer, body.grid-view #sizer, body.published #sizer { display: none !important; }
+  #sizer input[type=range] { width: min(260px, 40vw); accent-color: var(--amber); cursor: pointer; }
+  #sizer output { min-width: 5ch; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  @media (max-width: 640px) { #sizer { bottom: 76px; } }
+  #grid-sizer {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 90;
+    display: none; align-items: center; gap: 12px; padding: 8px 16px; font-size: 14px;
+    background: var(--panel); border: 1px solid var(--silk); border-radius: 999px; backdrop-filter: blur(8px);
+  }
+  body.grid-view #grid-sizer { display: flex; }
+  #grid-sizer input[type=range] { width: min(220px, 36vw); accent-color: var(--amber); cursor: pointer; }
+  @media (max-width: 640px) { #grid-sizer { bottom: 76px; } }
+  #hint { position: fixed; right: 20px; bottom: 28px; font-size: 13px; color: var(--ink-soft); font-style: italic; max-width: 40ch; text-align: right; }
+  body.published #hint { display: none; }
+
+  /* ---------- Drop overlay ---------- */
+  #dropzone {
+    position: fixed; inset: 16px; border: 1px dashed var(--amber); border-radius: 12px; display: none; place-items: center;
+    font-size: 20px; color: var(--amber); background: rgba(35,38,44,0.6); pointer-events: none; z-index: 100;
+  }
+  body.dropping #dropzone { display: grid; }
+
+  /* ---------- Lightbox ---------- */
+  #lightbox { position: fixed; inset: 0; background: var(--dim); display: none; place-items: center; z-index: 200; cursor: zoom-out; padding: 24px; }
+  #lightbox.open { display: grid; }
+  /* Photo stays put; only the text column scrolls */
+  #lightbox figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 14px; max-width: 92vw; max-height: 92vh; }
+  #lightbox img { max-width: 92vw; max-height: 88vh; box-shadow: 0 30px 80px rgba(0,0,0,0.7); flex: none; }
+  #lightbox figure.has-text img { max-height: 58vh; }
+  #lightbox figcaption {
+    --cap-scale: 1; --cap-width: 40ch; --cap-align: left;
+    max-width: min(var(--cap-width), 92vw); -webkit-user-select: text; user-select: text; cursor: auto;
+    overflow-y: auto; overscroll-behavior: contain; min-height: 0; max-height: 28vh; padding: 14px 18px 16px;
+    background: var(--bg); border: 1px solid var(--silk); box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+    scrollbar-width: thin; scrollbar-color: var(--silk) transparent;
+  }
+  #lightbox figcaption:empty { display: none; }
+  #lightbox .cap { font-size: calc(24px * var(--cap-scale)); line-height: 1.25; color: var(--ink); text-align: center; }
+  #lightbox .note { margin-top: 12px; font-size: calc(14px * var(--cap-scale)); line-height: 1.6; color: var(--ink); opacity: 0.85; white-space: pre-wrap; text-align: var(--cap-align); }
+  #lightbox .lay-switch .grp.dim { opacity: 0.4; pointer-events: none; }
+  /* Reading layout: text beside the photo (right or left) or stacked beneath it; narrow screens always stack */
+  @media (min-width: 900px) {
+    #lightbox figure.has-text.lay-right, #lightbox figure.has-text.lay-left { align-items: flex-start; gap: 32px; max-width: 94vw; }
+    #lightbox figure.has-text.lay-right { flex-direction: row; }
+    #lightbox figure.has-text.lay-left { flex-direction: row-reverse; }
+    #lightbox figure.has-text.lay-right img, #lightbox figure.has-text.lay-left img { max-height: 88vh; max-width: min(62vw, calc(94vw - 30ch - 32px)); }
+    #lightbox figure.has-text.lay-right figcaption, #lightbox figure.has-text.lay-left figcaption { flex: 0 0 var(--cap-width); width: var(--cap-width); max-width: calc(94vw - 30vw); max-height: 88vh; }
+  }
+  #lightbox .lay-switch {
+    position: fixed; top: 14px; right: 14px; display: none; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 6px 10px; cursor: auto;
+    background: var(--panel); border: 1px solid var(--silk); border-radius: 18px; backdrop-filter: blur(8px); font-size: 13px; max-width: calc(100vw - 28px);
+  }
+  #lightbox.open figure.has-text ~ .lay-switch, #lightbox.open .lay-switch.show { display: flex; }
+  #lightbox .lay-switch .grp { display: flex; align-items: center; gap: 2px; }
+  #lightbox .lay-switch span.lbl { padding: 0 6px 0 2px; color: var(--ink-soft); }
+  #lightbox .lay-switch button { border: none; background: transparent; color: var(--ink); font: 13px inherit; padding: 4px 9px; border-radius: 999px; cursor: pointer; }
+  #lightbox .lay-switch button:hover { background: rgba(127,127,127,0.15); }
+  #lightbox .lay-switch button.on { color: var(--amber); box-shadow: inset 0 0 0 1px var(--amber); }
+  #lightbox .lay-switch input[type=range] { width: 90px; accent-color: var(--amber); }
+  @media (max-width: 899px) { #lightbox .lay-switch .pos { display: none; } }
+  #sizer input[type=text], #sizer textarea {
+    background: var(--field); color: var(--ink); border: 1px solid var(--silk); padding: 6px 9px;
+    font-family: inherit; font-size: 14px; flex: 1; min-width: 0;
+  }
+  /* Notes box grows with its content (up to ~40% of the screen) and can also be dragged taller by its corner */
+  #sizer textarea { resize: vertical; min-height: 3.2em; max-height: 40vh; line-height: 1.45; overflow-y: auto; }
+  #sizer .ctl-row > span:first-child { width: 4ch; }
+  #sizer .ctl-row.text > span:first-child { width: 7ch; }
+  #sizer .ctl-row.top { align-items: flex-start; }
+  #sizer.locked input[type=text], #sizer.locked textarea { opacity: 1; pointer-events: auto; }
+
+  /* ---------- Save / load panel ---------- */
+  #panel {
+    position: fixed; inset: 0; background: var(--dim); display: none; place-items: center; z-index: 150;
+  }
+  #panel.open { display: grid; }
+  #panel .card {
+    width: min(560px, 92vw); background: var(--bg); border: 1px solid var(--silk); padding: 22px 24px 20px;
+    -webkit-user-select: text; user-select: text;
+  }
+  #panel h2 { margin: 0 0 6px; font-weight: 400; font-size: 20px; }
+  #panel p { margin: 0 0 14px; font-size: 14px; color: var(--ink-soft); line-height: 1.45; }
+  #panel textarea {
+    width: 100%; height: 130px; background: var(--field); color: var(--ink); border: 1px solid var(--silk);
+    padding: 10px; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; resize: vertical;
+  }
+  #panel .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+  #panel button, #panel label {
+    border: 1px solid var(--silk-strong); background: transparent; color: var(--ink); font: 14px inherit;
+    padding: 7px 14px; cursor: pointer;
+  }
+  #panel button:hover, #panel label:hover { border-color: var(--amber); color: var(--amber); }
+  #panel .primary { border-color: var(--amber); color: var(--amber); }
+  #panel input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  #panel select { background: var(--field); color: var(--ink); border: 1px solid var(--silk); font: 14px inherit; padding: 6px 8px; }
+  #panel .status { font-size: 13px; color: var(--ink-soft); margin-left: auto; }
+
+  #toast {
+    position: fixed; left: 50%; top: 24px; transform: translateX(-50%); z-index: 300;
+    background: var(--panel); border: 1px solid var(--amber); color: var(--ink); padding: 10px 16px;
+    font-size: 14px; max-width: min(60ch, 90vw); display: none; backdrop-filter: blur(8px);
+  }
+  #toast.show { display: block; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  @media (max-width: 640px) {
+    #hint { display: none; }
+    #bar { left: 12px; right: 12px; bottom: 12px; justify-content: center; }
+  }
+</style>
+</head>
+<body>
+
+<div id="viewport">
+<div id="world">
+<svg id="web" xmlns="http://www.w3.org/2000/svg"></svg>
+<div id="zones"><svg id="zone-svg" xmlns="http://www.w3.org/2000/svg"></svg></div>
+
+<div id="hub">
+  <div>
+    <h1 class="title" data-title>Photographs</h1>
+    <p id="hub-empty">Drop images anywhere to hang them on the web.</p>
+  </div>
+</div>
+
+<div id="stage"></div>
+<svg id="overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+<div id="zone-labels"></div>
+<svg id="zone-handles" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+</div>
+<div id="marquee"></div>
+<div id="zone-tip">Click to place corner points around the photos · click the first point (or press Enter) to close · Esc cancels · later: Ctrl+click a zone to add a point, Alt+click a point to remove it</div>
+
+<section id="gallery">
+  <header>
+    <h1 class="title" data-title>Photographs</h1>
+    <p id="grid-empty">Add photos to fill the grid.</p>
+  </header>
+  <div id="grid"></div>
+</section>
+
+<div id="dropzone">Release to add</div>
+
+<button id="bar-show" title="Show the toolbar (H)">Show bar</button>
+<div id="bar">
+  <button id="bar-hide" title="Hide the toolbar (H)">Hide</button>
+  <span class="sep"></span>
+  <button id="layout-toggle">Grid</button>
+  <span class="sep web-only"></span>
+  <button id="zoom-out" class="zoom web-only" title="Zoom out">−</button>
+  <button id="zoom-in" class="zoom web-only" title="Zoom in">+</button>
+  <button id="zoom-reset" class="web-only">Reset view</button>
+  <button id="zoom-fit" class="web-only" title="Zoom out to show every photo">Fit all</button>
+  <button id="zones-toggle" title="Show zone borders in the web; group the grid by zone">Zones</button>
+  <button id="zone-draw-btn" class="web-only edit-only" title="Click points on empty space to outline a new zone">Draw zone</button>
+  <span class="sep edit-only"></span>
+  <label class="primary edit-only" tabindex="0">Add photos<input id="file" type="file" accept="image/*" multiple></label>
+  <button id="overlap-toggle" class="edit-only web-only" title="Highlight photos hidden behind others">Overlaps</button>
+  <button id="layers-toggle" class="edit-only web-only" title="Show the layers panel">Layers</button>
+  <button id="theme-toggle" class="edit-only">Theme</button>
+  <button id="rename" class="edit-only">Rename</button>
+  <span class="menu-wrap edit-only"><button id="shuffle" class="edit-only" aria-haspopup="menu">Shuffle ▾</button>
+    <div id="shuffle-menu" class="menu" role="menu">
+      <button data-shuffle="all">Shuffle all — positions, sizes, tilts</button>
+      <button data-shuffle="pos">Shuffle positions only</button>
+      <button data-shuffle="size">Shuffle sizes only</button>
+      <button data-shuffle="tilt">Shuffle tilts only</button>
+    </div></span>
+  <button id="mode" class="edit-only">View</button>
+  <span class="sep edit-only"></span>
+  <button id="undo" class="edit-only" title="Undo (Ctrl+Z)">Undo</button>
+  <button id="redo" class="edit-only" title="Redo (Ctrl+Shift+Z)">Redo</button>
+  <span class="sep edit-only"></span>
+  <button id="save" class="edit-only">Save</button>
+  <button id="load" class="edit-only">Load</button>
+  <button id="publish" class="edit-only">Publish</button>
+</div>
+<div id="sizer">
+  <div class="ctl-row"><span>Size</span><input id="size-range" type="range" min="0" max="1000" step="1"><input id="size-num" type="number" min="60" max="1600" step="1"><span>px</span>
+    <button id="size-random" title="Pick a random size">Random</button></div>
+  <div class="ctl-row"><span>Tilt</span><input id="tilt-range" type="range" min="-180" max="180" step="0.01"><input id="tilt-num" type="number" min="-180" max="180" step="0.01"><span>°</span>
+    <button id="tilt-straight">Straight</button><button id="tilt-random" title="Pick a random tilt">Random</button><button id="turn-ccw" title="Turn 90° left">↺ 90°</button><button id="turn-cw" title="Turn 90° right">↻ 90°</button></div>
+  <div class="ctl-row"><span>Layer</span>
+    <button id="layer-back" class="layer-btn" title="Send to back">To back</button><button id="layer-down" class="layer-btn" title="Move back one layer">Back one</button>
+    <button id="layer-up" class="layer-btn" title="Move forward one layer">Forward one</button><button id="layer-front" class="layer-btn" title="Bring to front">To front</button>
+    <button id="lock-toggle" title="Locked photos can't be moved, resized, tilted, or removed">Lock</button></div>
+  <div class="ctl-row"><span></span><button id="both-random" title="Random size and tilt together">Randomize both</button></div>
+  <div class="ctl-row text"><span>Caption</span><input id="cap-input" type="text" maxlength="200" placeholder="Shown when the photo is opened"></div>
+  <div class="ctl-row top text"><span>Notes</span><textarea id="note-input" rows="3" maxlength="4000" placeholder="Extra details, location, camera, story…"></textarea></div>
+</div>
+<aside id="layers"><header><span>Layers</span><span>top first · drag to reorder</span></header><div id="layer-list"></div></aside>
+<div id="theme">
+  <div class="trow"><span>Background</span><input id="bg-color" type="color"><div class="swatches" id="bg-swatches"></div></div>
+  <div class="trow"><span>Lightness</span><input id="bg-light" type="range" min="0" max="100" step="1"></div>
+  <div class="trow"><span>Web colour</span><input id="web-color" type="color"><label class="auto"><input id="web-auto" type="checkbox"> auto-contrast</label></div>
+  <div class="trow"><span>Web strength</span><input id="web-strength" type="range" min="10" max="100" step="1"></div>
+  <button class="reset" id="theme-reset">Reset to default</button>
+</div>
+<div id="grid-sizer"><span>Row height</span><input id="grid-range" type="range" min="18" max="100" step="1"></div>
+<p id="hint">Drag photos to move, drag empty space to look around, scroll to zoom. Shift+click or Shift+drag to select several photos and move them together. Click the title in the centre disc to rename it.</p>
+
+<div id="lightbox"><figure><img alt=""><figcaption></figcaption></figure>
+  <div class="lay-switch show" aria-label="Text options">
+    <div class="grp pos"><span class="lbl">Text</span><button data-lay="left">Left</button><button data-lay="right">Right</button><button data-lay="stack">Below</button></div>
+    <div class="grp"><span class="lbl">Align</span><button data-align="left" title="Align left">⇤</button><button data-align="center" title="Centre">☰</button><button data-align="right" title="Align right">⇥</button></div>
+    <div class="grp"><span class="lbl">Size</span><input id="cap-size" type="range" min="80" max="160" step="5" title="Text size"></div>
+    <div class="grp wid"><span class="lbl">Width</span><input id="cap-width" type="range" min="24" max="70" step="1" title="Text box width (side layouts)"></div>
+  </div>
+</div>
+<div id="toast" role="status"></div>
+
+<div id="panel" role="dialog" aria-modal="true">
+  <div class="card">
+    <h2 id="panel-title"></h2>
+    <p id="panel-text"></p>
+    <textarea id="panel-json" spellcheck="false"></textarea>
+    <div class="row" id="panel-actions"></div>
+  </div>
+</div>
+
+<script id="layout-data" type="application/json"></script>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const stage = $('stage'), web = $('web'), hub = $('hub'), grid = $('grid');
+  const lightbox = $('lightbox'), lightImg = lightbox.querySelector('img');
+  const LEGACY_SIZES = [150, 220, 300, 400];
+  const MIN_W = 60, MAX_W = 1600;
+  const GOLDEN = 2.399963;
+
+  const PUBLISHED = document.body.classList.contains('published');
+  let photos = [];              // { id, src, x, y, size, rot }
+  let title = 'Photographs';
+  let viewing = PUBLISHED;
+  let gridView = false;
+  let gridScale = 0.42; // row height as a fraction of the gallery width
+  let overlapMode = false, layersOpen = false;
+  let lightLayout = 'right'; // 'left' | 'right' | 'stack' — where caption text sits in the lightbox
+  let lightText = { align: 'left', size: 1, width: 40 }; // alignment, size multiplier, box width in ch
+
+  // ---------- Theme ----------
+  const DEFAULT_THEME = { bg: '#23262C', web: null, webStrength: 0.42 }; // web: null = auto-contrast
+  let theme = { ...DEFAULT_THEME };
+  const hexToRgb = h => { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+  const rgbToHex = ([r, g, b]) => '#' + [r, g, b].map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, '0')).join('');
+  const lum = h => { const [r, g, b] = hexToRgb(h).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const mix = (a, b, t) => rgbToHex(hexToRgb(a).map((v, i) => v + (hexToRgb(b)[i] - v) * t));
+  const rgba = (h, a) => `rgba(${hexToRgb(h).join(',')},${a})`;
+  const hexToHsl = h => { let [r, g, b] = hexToRgb(h).map(v => v / 255); const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2; let hh = 0, ss = 0; if (mx !== mn) { const d = mx - mn; ss = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn); hh = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4; hh /= 6; } return [hh, ss, l]; };
+  const hslToHex = (hh, ss, l) => { const f = (p, q, t) => { if (t < 0) t += 1; if (t > 1) t -= 1; if (t < 1 / 6) return p + (q - p) * 6 * t; if (t < 1 / 2) return q; if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6; return p; }; if (ss === 0) return rgbToHex([l * 255, l * 255, l * 255]); const q = l < 0.5 ? l * (1 + ss) : l + ss - l * ss, p = 2 * l - q; return rgbToHex([f(p, q, hh + 1 / 3) * 255, f(p, q, hh) * 255, f(p, q, hh - 1 / 3) * 255]); };
+  function applyTheme() {
+    const bg = theme.bg, light = lum(bg) > 0.4;
+    const ink = light ? mix(bg, '#000000', 0.85) : mix(bg, '#ffffff', 0.86);
+    const web = theme.web || (light ? mix(bg, '#000000', 0.7) : mix(bg, '#ffffff', 0.9));
+    const st = Math.max(0.1, Math.min(1, theme.webStrength));
+    const r = document.documentElement.style;
+    r.setProperty('--bg', bg); r.setProperty('--ink', ink); r.setProperty('--ink-soft', rgba(ink, 0.62));
+    r.setProperty('--silk', rgba(web, st)); r.setProperty('--silk-strong', rgba(web, Math.min(1, st + 0.28)));
+    r.setProperty('--panel', rgba(bg, 0.88)); r.setProperty('--field', light ? mix(bg, '#000000', 0.06) : mix(bg, '#000000', 0.25));
+    r.setProperty('--dim', rgba(mix(bg, light ? '#ffffff' : '#000000', 0.3), 0.975));
+    r.setProperty('--amber', light ? '#9C7A2E' : '#D6B26E');
+    r.setProperty('--warn', light ? '#C24E2E' : '#E4876C');
+    document.documentElement.style.colorScheme = light ? 'light' : 'dark';
+    const bc = $('bg-color'), wc = $('web-color'), wa = $('web-auto'), ws = $('web-strength'), bl = $('bg-light');
+    if (bc) { bc.value = bg; wc.value = web; wa.checked = !theme.web; wc.disabled = !theme.web; ws.value = Math.round(st * 100); bl.value = Math.round(hexToHsl(bg)[2] * 100); }
+  }
+
+  // ---------- Undo / redo ----------
+  // Each entry is a snapshot of everything editable. Image data is shared by reference, so snapshots are cheap.
+  const undoStack = [], redoStack = [], HISTORY_MAX = 100;
+  const snapshot = () => ({ photos: photos.map(p => ({ ...p })), zones: zones.map(z => ({ ...z, pts: z.pts.map(q => [...q]) })), zoneText, title, gridScale, theme: { ...theme }, lightLayout, lightText: { ...lightText } });
+  function pushHistory(snap = snapshot()) {
+    undoStack.push(snap); if (undoStack.length > HISTORY_MAX) undoStack.shift();
+    redoStack.length = 0; updateHistoryButtons();
+  }
+  function restore(snap) {
+    photos = snap.photos.map(p => ({ ...p })); title = snap.title; gridScale = snap.gridScale;
+    if (snap.theme) { theme = { ...snap.theme }; applyTheme(); }
+    if (snap.lightLayout) lightLayout = snap.lightLayout;
+    if (snap.lightText) lightText = { ...snap.lightText };
+    zones = (snap.zones || []).map(z => ({ ...z, pts: z.pts.map(q => [...q]) }));
+    if (isFinite(snap.zoneText)) setZoneText(snap.zoneText);
+    const gr = $('grid-range'); if (gr) gr.value = Math.round(gridScale * 100);
+    select(null); render();
+  }
+  function undo() { if (!undoStack.length) return; redoStack.push(snapshot()); restore(undoStack.pop()); updateHistoryButtons(); }
+  function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); restore(redoStack.pop()); updateHistoryButtons(); }
+  function updateHistoryButtons() {
+    const u = $('undo'), r = $('redo');
+    if (u) u.disabled = !undoStack.length;
+    if (r) r.disabled = !redoStack.length;
+  }
+  let selectedId = null;            // primary selection (drives the panel)
+  const selectedIds = new Set();    // everything selected (group moves, delete)
+  let zones = [];                   // { id, pts: [[x, y], …], label, color } — polygon corners in canvas px from the hub
+  let zonesVisible = false, zoneDraw = false, zoneText = 16; // zone label size in px
+  const ZONE_COLORS = ['#D6B26E', '#6FA8DC', '#8BC49A', '#E4876C', '#B99AE0', '#E0C25C', '#7FCBC4', '#D98BB0'];
+
+  // ---------- Pan / zoom ----------
+  const world = $('world'), viewport = $('viewport');
+  const view = { x: 0, y: 0, s: 1 };
+  const MIN_S = 0.15, MAX_S = 5;
+  function applyView() { world.style.transform = `translate(${view.x}px,${view.y}px) scale(${view.s})`; if (typeof selectedZone === 'string' && selectedZone) renderZones(); }
+  function zoomAt(factor, cx, cy) {
+    const ns = Math.min(MAX_S, Math.max(MIN_S, view.s * factor));
+    const k = ns / view.s;
+    view.x = cx - (cx - view.x) * k; view.y = cy - (cy - view.y) * k; view.s = ns;
+    applyView();
+  }
+  function resetView() { view.x = 0; view.y = 0; view.s = 1; applyView(); }
+  function fitView() {
+    if (!photos.length) { resetView(); return; }
+    let minX = -130, minY = -130, maxX = 130, maxY = 130; // start with the hub disc
+    for (const p of photos) for (const [x, y] of cornersOf(p)) { const lx = x - hubX(), ly = y - hubY(); minX = Math.min(minX, lx); minY = Math.min(minY, ly); maxX = Math.max(maxX, lx); maxY = Math.max(maxY, ly); }
+    const pad = 60, bw = maxX - minX + pad * 2, bh = maxY - minY + pad * 2;
+    const s = Math.min(MAX_S, Math.max(MIN_S, Math.min(innerWidth / bw, innerHeight / bh)));
+    const cxW = hubX() + (minX + maxX) / 2, cyW = hubY() + (minY + maxY) / 2; // centre of content in layer coords
+    view.s = s; view.x = innerWidth / 2 - cxW * s; view.y = innerHeight / 2 - cyW * s;
+    applyView();
+  }
+  viewport.addEventListener('wheel', e => {
+    if (gridView) return;
+    e.preventDefault();
+    zoomAt(Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), e.clientX, e.clientY);
+  }, { passive: false });
+  $('zoom-in').addEventListener('click', () => zoomAt(1.25, innerWidth / 2, innerHeight / 2));
+  $('zoom-out').addEventListener('click', () => zoomAt(0.8, innerWidth / 2, innerHeight / 2));
+  $('zoom-reset').addEventListener('click', resetView);
+  $('zoom-fit').addEventListener('click', fitView);
+
+  // Pan by dragging empty space; pinch with two pointers.
+  const pointers = new Map();
+  let pan = null, pinch = null;
+  const toWorld = (clientX, clientY) => ({ x: (clientX - view.x) / view.s - hubX(), y: (clientY - view.y) / view.s - hubY() });
+  const marqueeEl = $('marquee');
+  let marquee = null, draft = null; // draft: { pts: [[x,y],…], cursor: [x,y] } while outlining a zone
+  viewport.addEventListener('pointerdown', e => {
+    if (e.target.closest('.photo') || e.target.closest('h1.title') || e.target.closest('.zone')) return;
+    if (!viewing && !PUBLISHED && zoneDraw && !gridView) {      // outlining a new zone: each click adds a corner
+      e.stopPropagation();
+      const wpt = toWorld(e.clientX, e.clientY);
+      if (!draft) draft = { pts: [], cursor: null };
+      const first = draft.pts[0];
+      if (first && draft.pts.length >= 3 && Math.hypot(first[0] - wpt.x, first[1] - wpt.y) * view.s < 14) { finishZone(); return; }
+      draft.pts.push([Math.round(wpt.x), Math.round(wpt.y)]); renderZones(); return;
+    }
+    if (!viewing && !PUBLISHED && e.shiftKey && !gridView) {      // Shift+drag: box select
+      e.stopPropagation(); viewport.setPointerCapture(e.pointerId);
+      marquee = { sx: e.clientX, sy: e.clientY, id: e.pointerId };
+      marqueeEl.classList.add('show'); return;
+    }
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    viewport.setPointerCapture(e.pointerId);
+    if (selectedIds.size) { select(null); render(); }
+    if (pointers.size === 1) { pan = { sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y, clearZone: !!selectedZone, moved: false }; viewport.classList.add('panning'); }
+    else if (pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), s: view.s }; pan = null;
+    }
+  });
+  viewport.addEventListener('pointermove', e => {
+    if (marquee && e.pointerId === marquee.id) {
+      const l = Math.min(marquee.sx, e.clientX), t = Math.min(marquee.sy, e.clientY);
+      Object.assign(marqueeEl.style, { left: l + 'px', top: t + 'px', width: Math.abs(e.clientX - marquee.sx) + 'px', height: Math.abs(e.clientY - marquee.sy) + 'px' });
+      return;
+    }
+    if (draft) { const c = toWorld(e.clientX, e.clientY); draft.cursor = [c.x, c.y]; renderZones(); }
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch && pointers.size === 2) {
+      const [a, b] = [...pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y), mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      zoomAt((pinch.s * d / pinch.d) / view.s, mx, my);
+    } else if (pan) {
+      view.x = pan.ox + (e.clientX - pan.sx); view.y = pan.oy + (e.clientY - pan.sy); applyView();
+      if (Math.hypot(e.clientX - pan.sx, e.clientY - pan.sy) > 4) pan.moved = true;
+    }
+  });
+  const endPan = e => {
+    if (marquee && e.pointerId === marquee.id) {
+      const r = marqueeEl.getBoundingClientRect(); marqueeEl.classList.remove('show'); marquee = null;
+      if (r.width > 4 || r.height > 4) {
+        for (const p of photos) {
+          const sc = toScreen(p), sx = view.x + sc.cx * view.s, sy = view.y + sc.cy * view.s;
+          if (sx >= r.left && sx <= r.right && sy >= r.top && sy <= r.bottom) selectedIds.add(p.id);
+        }
+        syncSelection(selectedId); renderLayers();
+      }
+      return;
+    }
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch = null;
+    if (pointers.size === 0) { if (pan && pan.clearZone && !pan.moved && selectedZone) selectZone(null); pan = null; viewport.classList.remove('panning'); }
+  };
+  viewport.addEventListener('pointerup', endPan);
+  viewport.addEventListener('pointercancel', endPan);
+
+  // ---------- Layout data ----------
+  function getLayout() { return { version: 9, coords: 'px', title, photos, zones, zonesVisible, zoneText, view: { ...view }, gridScale, theme: { ...theme }, lightLayout, lightText: { ...lightText } }; }
+  function setLayout(data) {
+    if (!data || !Array.isArray(data.photos)) throw new Error('bad layout');
+    // Older layouts stored positions as fractions of the window; convert them using the window they were made on
+    // (the current one is the best available guess when no reference size was saved)
+    const legacy = data.coords !== 'px';
+    const refW = (data.ref && data.ref.w) || innerWidth, refH = (data.ref && data.ref.h) || innerHeight;
+    const cx = v => legacy ? Math.round(((+v || 0.5) - 0.5) * refW) : Math.round(+v || 0);
+    const cy = v => legacy ? Math.round(((+v || 0.5) - 0.5) * refH) : Math.round(+v || 0);
+    photos = data.photos.map(p => ({ id: p.id || crypto.randomUUID(), src: p.src, x: cx(p.x), y: cy(p.y), w: Math.min(MAX_W, Math.max(MIN_W, +p.w || LEGACY_SIZES[p.size | 0] || 220)), rot: round2(+p.rot || 0), ar: +p.ar || undefined, z: isFinite(p.z) ? +p.z : undefined, locked: !!p.locked, name: typeof p.name === 'string' ? p.name : '', caption: typeof p.caption === 'string' ? p.caption : '', note: typeof p.note === 'string' ? p.note : '' }));
+    photos.forEach((p, i) => { if (p.z === undefined) p.z = i; }); // older layouts: stack in list order
+    title = typeof data.title === 'string' && data.title.trim() ? data.title.trim() : 'Photographs';
+    if (isFinite(data.gridScale)) gridScale = Math.min(1, Math.max(0.18, +data.gridScale));
+    zones = Array.isArray(data.zones) ? data.zones.map(z => {
+      let pts = Array.isArray(z.pts) ? z.pts.map(q => [Math.round(+q[0] || 0), Math.round(+q[1] || 0)]) : null;
+      if (!pts || pts.length < 3) { const x = +z.x || 0, y = +z.y || 0, w = Math.max(40, +z.w || 200), h = Math.max(40, +z.h || 200); pts = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]; } // older rectangle zones
+      return { id: z.id || crypto.randomUUID(), pts, label: typeof z.label === 'string' ? z.label : 'Zone', color: /^#[0-9a-f]{6}$/i.test(z.color) ? z.color : ZONE_COLORS[0], size: isFinite(z.size) ? Math.min(60, Math.max(10, +z.size)) : undefined, lx: Math.round(+z.lx || 0), ly: Math.round(+z.ly || 0), rot: round2(Math.max(-180, Math.min(180, +z.rot || 0))), locked: !!z.locked };
+    }) : [];
+    setZoneText(isFinite(data.zoneText) ? +data.zoneText : 16);
+    zones.forEach(z => { if (z.size === undefined) z.size = zoneText; });
+    setZonesVisible(!!data.zonesVisible);
+    if (['left', 'right', 'stack'].includes(data.lightLayout)) lightLayout = data.lightLayout;
+    if (data.lightText) lightText = { align: ['left', 'center', 'right'].includes(data.lightText.align) ? data.lightText.align : 'left', size: Math.min(1.6, Math.max(0.8, +data.lightText.size || 1)), width: Math.min(70, Math.max(24, +data.lightText.width || 40)) };
+    const t = data.theme || {};
+    theme = { bg: /^#[0-9a-f]{6}$/i.test(t.bg) ? t.bg : DEFAULT_THEME.bg, web: /^#[0-9a-f]{6}$/i.test(t.web) ? t.web : null, webStrength: isFinite(t.webStrength) ? +t.webStrength : DEFAULT_THEME.webStrength };
+    applyTheme();
+    $('grid-range').value = Math.round(gridScale * 100);
+    if (data.view && isFinite(data.view.s)) { view.x = +data.view.x || 0; view.y = +data.view.y || 0; view.s = Math.min(MAX_S, Math.max(MIN_S, +data.view.s)); } else resetView();
+    applyView();
+    select(null);
+    render();
+  }
+  function layoutJSON() { return JSON.stringify(getLayout()).replace(/</g, '\\u003c'); }
+
+  // ---------- Placement ----------
+  // Photo positions are canvas pixels from the hub, so an arrangement is identical on every screen.
+  // The hub sits at the centre of the world layer; toScreen converts to layer coordinates for drawing.
+  const hubX = () => innerWidth / 2, hubY = () => innerHeight / 2;
+  const toScreen = p => ({ cx: hubX() + p.x, cy: hubY() + p.y });
+  const REF = { w: 1400, h: 900 }; // reference canvas used for scatter patterns
+  function scatterPosition(i) {
+    const a = i * GOLDEN + (Math.random() - 0.5) * 0.6;
+    const r = 0.16 + 0.11 * Math.sqrt(i + 1) + (Math.random() - 0.5) * 0.06;
+    return { x: Math.cos(a) * r * REF.h * 1.25, y: Math.sin(a) * r * REF.h };
+  }
+  const round2 = n => Math.round(n * 100) / 100;
+  const randRot = () => round2((Math.random() - 0.5) * 40); // ±20°
+  // Sizes skew small with an occasional large one, so a batch reads as a mix rather than a uniform row
+  const randWidth = () => { const r = Math.random(); return Math.round(r < 0.55 ? 120 + Math.random() * 160 : r < 0.85 ? 280 + Math.random() * 160 : 440 + Math.random() * 200); };
+
+  // ---------- Rendering ----------
+  const ctlHTML = `<div class="ctl"><button data-act="remove" title="Remove">×</button></div>`;
+
+  const stageEls = new Map(), tileEls = new Map();
+  function render() {
+    document.querySelectorAll('[data-title]').forEach(h => { if (h.textContent !== title) h.textContent = title; });
+    document.title = title;
+    $('hub-empty').classList.toggle('hidden', photos.length > 0);
+    $('grid-empty').style.display = photos.length ? 'none' : '';
+
+    photos.forEach(ensureAspect);
+    releaseUnused();
+    // Reuse each photo's element between renders; only what changed is touched
+    const live = new Set();
+    for (const p of [...photos].sort((a, b) => (a.z || 0) - (b.z || 0))) {
+      live.add(p.id);
+      let el = stageEls.get(p.id);
+      if (!el) {
+        el = document.createElement('div'); el.dataset.id = p.id;
+        el.innerHTML = `<img data-for="${p.id}" alt="">` + ctlHTML + `<span class="badge lock">locked</span><span class="badge cover">covered</span>`;
+        el.querySelector('img').addEventListener('load', drawWeb);
+        stageEls.set(p.id, el);
+      }
+      el.className = 'photo' + (selectedIds.has(p.id) ? ' selected' : '') + (p.locked ? ' locked' : '');
+      const st = el.style, sc = toScreen(p);
+      st.width = p.w + 'px'; st.left = sc.cx + 'px'; st.top = sc.cy + 'px'; st.transform = `translate(-50%,-50%) rotate(${p.rot}deg)`;
+      if ((p.caption || '') !== (el.title || '')) el.title = p.caption || '';
+      const im = el.firstElementChild, want = displaySrc(p);
+      if (im.src !== want) im.src = want;
+      if (el.parentNode !== stage || el !== stage.lastElementChild) stage.appendChild(el); // keeps z order with minimal moves
+    }
+    for (const [id, el] of stageEls) if (!live.has(id)) { el.remove(); stageEls.delete(id); }
+
+    renderGrid();
+    renderLayers();
+    renderZones();
+    updateOverlaps();
+    drawWeb();
+  }
+
+  // Justified rows: every row shares one height and runs edge to edge; photos keep their proportions.
+  function renderGrid() {
+    if (!gridView) { grid.innerHTML = ''; tileEls.clear(); return; }
+    const frag = document.createDocumentFragment(), liveTiles = new Set();
+    const W = grid.clientWidth || innerWidth - 64;
+    const gap = parseFloat(getComputedStyle(grid).getPropertyValue('--gap')) || 14;
+    const target = Math.max(120, W * gridScale);
+    const heightFor = (items) => (W - gap * (items.length - 1)) / items.reduce((a, it) => a + it.ar, 0);
+    // Pack a list of photos into justified rows
+    const pack = list => {
+      const rows = []; let row = [];
+      for (const p of list) {
+        const it = { p, ar: p.ar || 1.5 };
+        const withIt = [...row, it];
+        const hWith = heightFor(withIt);
+        if (row.length && hWith < target) {
+          // Row is now too short: close it before or after this photo, whichever lands nearer the target.
+          const hWithout = heightFor(row);
+          if (Math.abs(hWithout - target) <= Math.abs(hWith - target)) { rows.push({ items: row, h: hWithout }); row = [it]; }
+          else { rows.push({ items: withIt, h: hWith }); row = []; }
+        } else row = withIt;
+      }
+      if (row.length) rows.push({ items: row, h: Math.min(heightFor(row), target * 1.6) });
+      return rows;
+    };
+    const appendRows = rows => {
+      for (const r of rows) {
+        const div = document.createElement('div'); div.className = 'row';
+        const h = Math.round(r.h);
+        let used = 0;
+        r.items.forEach(({ p, ar }, i) => {
+          const last = i === r.items.length - 1;
+          const full = r.items.reduce((a, it) => a + it.ar, 0) * r.h + gap * (r.items.length - 1) >= W - 1;
+          let w = Math.round(ar * r.h);
+          if (last && full) w = W - gap * (r.items.length - 1) - used;
+          used += w;
+          let t = tileEls.get(p.id);
+          if (!t) { t = document.createElement('div'); t.dataset.id = p.id; t.innerHTML = `<img data-for="${p.id}" alt="">` + ctlHTML; tileEls.set(p.id, t); }
+          liveTiles.add(p.id);
+          t.className = 'tile' + (selectedIds.has(p.id) ? ' selected' : '');
+          t.draggable = !viewing && !p.locked;
+          if ((p.caption || '') !== (t.title || '')) t.title = p.caption || '';
+          t.style.width = w + 'px'; t.style.height = h + 'px';
+          const im = t.firstElementChild, want = displaySrc(p);
+          if (im.src !== want) im.src = want;
+          div.appendChild(t);
+        });
+        frag.appendChild(div);
+      }
+    };
+    if (zonesVisible && zones.length) {
+      // Sort the photos into the zones they sit in (by centre point); the rest go in a final group
+      const groups = zones.map(z => ({ z, list: [] })), rest = [];
+      for (const p of photos) {
+        const g = groups.find(gr => pointInPoly([p.x, p.y], gr.z.pts));
+        (g ? g.list : rest).push(p);
+      }
+      for (const g of groups) {
+        if (!g.list.length) continue;
+        const head = document.createElement('h2'); head.className = 'zone-head'; head.style.setProperty('--zc', g.z.color);
+        head.innerHTML = `<span>${escapeHTML(g.z.label)}</span><small>${g.list.length}</small>`;
+        frag.appendChild(head); appendRows(pack(g.list));
+      }
+      if (rest.length) {
+        const head = document.createElement('h2'); head.className = 'zone-head other';
+        head.innerHTML = `<span>Elsewhere</span><small>${rest.length}</small>`;
+        frag.appendChild(head); appendRows(pack(rest));
+      }
+    } else appendRows(pack(photos));
+    for (const [id, t] of tileEls) if (!liveTiles.has(id)) { t.remove(); tileEls.delete(id); }
+    grid.replaceChildren(frag);
+  }
+
+  // Aspect ratios are needed for the grid; fill them in for any photo that lacks one.
+  const arPending = new Set();
+  function ensureAspect(p) {
+    if (p.ar || arPending.has(p.id)) return;
+    arPending.add(p.id);
+    const im = new Image();
+    im.onload = () => { p.ar = im.naturalWidth / im.naturalHeight || 1.5; arPending.delete(p.id); if (gridView) renderGrid(); };
+    im.onerror = () => arPending.delete(p.id);
+    im.src = fullSrc(p);
+  }
+
+  function drawWeb() {
+    if (gridView) return;
+    const W = innerWidth, H = innerHeight;
+    web.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    const pts = photos.map(p => ({ id: p.id, ...toScreen(p) }));
+    const hx = W / 2, hy = H / 2, R = hub.offsetWidth / 2 + 6; // spokes start at the disc's edge
+    let out = '';
+    for (const p of pts) {
+      const dx = p.cx - hx, dy = p.cy - hy, d = Math.hypot(dx, dy);
+      if (d <= R) continue;
+      out += `<line class="spoke" x1="${hx + dx / d * R}" y1="${hy + dy / d * R}" x2="${p.cx}" y2="${p.cy}"/>`;
+    }
+    const seen = new Set();
+    const link = (a, b, cls = '') => {
+      const key = a.id < b.id ? a.id + '|' + b.id : b.id + '|' + a.id;
+      if (seen.has(key)) return; seen.add(key);
+      out += `<line class="${cls}" x1="${a.cx}" y1="${a.cy}" x2="${b.cx}" y2="${b.cy}"/>`;
+    };
+    // The spiral thread: photos joined in order of angle around the hub, closing the loop
+    if (pts.length > 2) {
+      const ring = pts.map(p => ({ ...p, ang: Math.atan2(p.cy - hy, p.cx - hx), d: Math.hypot(p.cx - hx, p.cy - hy) })).sort((a, b) => a.ang - b.ang);
+      let dPath = `M${ring[0].cx} ${ring[0].cy}`;
+      for (let i = 1; i <= ring.length; i++) {
+        const a = ring[i - 1], b = ring[i % ring.length];
+        const mx = (a.cx + b.cx) / 2, my = (a.cy + b.cy) / 2;
+        const md = Math.hypot(mx - hx, my - hy) || 1, sag = 0.06 * Math.hypot(a.cx - b.cx, a.cy - b.cy);
+        const qx = mx - (mx - hx) / md * sag, qy = my - (my - hy) / md * sag; // bow slightly toward the hub
+        dPath += ` Q${qx} ${qy} ${b.cx} ${b.cy}`;
+      }
+      out += `<path class="ring" d="${dPath}"/>`;
+      // Faint orbits at the nearest, middle, and farthest photo distances
+      const ds = ring.map(p => p.d).sort((a, b) => a - b);
+      [ds[0], ds[Math.floor(ds.length / 2)], ds[ds.length - 1]].forEach(r => { if (r > R + 20) out += `<circle class="orb" cx="${hx}" cy="${hy}" r="${r}"/>`; });
+    }
+    for (const a of pts) {
+      const near = pts.filter(b => b.id !== a.id).map(b => ({ b, d: Math.hypot(a.cx - b.cx, a.cy - b.cy) })).sort((u, v) => u.d - v.d).slice(0, 3);
+      for (const { b } of near) link(a, b);
+    }
+    web.innerHTML = out;
+  }
+
+  const byId = id => photos.find(q => q.id === id);
+
+  // ---------- Display cache ----------
+  // Each photo gets a blob URL for its full image (no base64 re-parsing per render) and, once ready, a small
+  // display copy for the web/grid/layers. Only the lightbox ever decodes the full-size picture.
+  const THUMB_EDGE = 1200;
+  const disp = new Map(); // id → { src, full, thumb, making }
+  const bytesOfDataURL = src => { const b = atob(src.slice(src.indexOf(',') + 1)); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
+  const mimeOf = src => (src.match(/^data:([^;,]+)/) || [, 'image/jpeg'])[1];
+  function dispFor(p) {
+    let d = disp.get(p.id);
+    if (d && d.src === p.src) return d;
+    if (d) { URL.revokeObjectURL(d.full); if (d.thumb) URL.revokeObjectURL(d.thumb); }
+    const full = p.src.startsWith('data:') ? URL.createObjectURL(new Blob([bytesOfDataURL(p.src)], { type: mimeOf(p.src) })) : p.src;
+    d = { src: p.src, full, thumb: null, making: false };
+    disp.set(p.id, d);
+    return d;
+  }
+  const displaySrc = p => { const d = dispFor(p); if (!d.thumb && !d.making) queueThumb(p, d); return d.thumb || d.full; };
+  const fullSrc = p => dispFor(p).full;
+  const thumbQueue = [];
+  let thumbBusy = false;
+  function queueThumb(p, d) { d.making = true; thumbQueue.push({ p, d }); if (!thumbBusy) nextThumb(); }
+  function nextThumb() {
+    const job = thumbQueue.shift(); if (!job) { thumbBusy = false; return; }
+    thumbBusy = true;
+    const { p, d } = job;
+    const im = new Image();
+    im.onload = () => {
+      try {
+        const k = Math.min(1, THUMB_EDGE / Math.max(im.naturalWidth, im.naturalHeight));
+        if (k === 1) { d.thumb = d.full; swapThumb(p.id, d.thumb); }
+        else {
+          const c = document.createElement('canvas'); c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
+          c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+          c.toBlob(b => { if (b && disp.get(p.id) === d) { d.thumb = URL.createObjectURL(b); swapThumb(p.id, d.thumb); } d.making = false; setTimeout(nextThumb, 0); }, p.src.startsWith('data:image/png') ? 'image/png' : 'image/jpeg', 0.86);
+          return;
+        }
+      } catch {}
+      d.making = false; setTimeout(nextThumb, 0);
+    };
+    im.onerror = () => { d.making = false; setTimeout(nextThumb, 0); };
+    im.src = d.full;
+  }
+  function swapThumb(id, url) { document.querySelectorAll(`img[data-for="${id}"]`).forEach(im => { if (im.src !== url) im.src = url; }); }
+  function releaseUnused() {
+    const live = new Set(photos.map(p => p.id));
+    for (const [id, d] of disp) if (!live.has(id)) { URL.revokeObjectURL(d.full); if (d.thumb && d.thumb !== d.full) URL.revokeObjectURL(d.thumb); disp.delete(id); }
+  }
+  let toastTimer;
+  function toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 6000);
+  }
+  const zSorted = () => [...photos].sort((a, b) => (a.z || 0) - (b.z || 0));
+
+  // ----- Overlap detection: separating-axis test on the rotated rectangles -----
+  function cornersOf(p) {
+    const { cx, cy } = toScreen(p), hw = p.w / 2, hh = p.w / (p.ar || 1.5) / 2;
+    const c = Math.cos(p.rot * Math.PI / 180), sn = Math.sin(p.rot * Math.PI / 180);
+    return [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]].map(([x, y]) => [cx + x * c - y * sn, cy + x * sn + y * c]);
+  }
+  function polysOverlap(A, B) {
+    for (const poly of [A, B]) for (let i = 0; i < 4; i++) {
+      const [x1, y1] = poly[i], [x2, y2] = poly[(i + 1) % 4], nx = y1 - y2, ny = x2 - x1;
+      const pa = A.map(([x, y]) => x * nx + y * ny), pb = B.map(([x, y]) => x * nx + y * ny);
+      if (Math.max(...pa) < Math.min(...pb) || Math.max(...pb) < Math.min(...pa)) return false;
+    }
+    return true;
+  }
+  const pointInPoly = ([x, y], poly) => {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  };
+  // Returns a map of covered photo id → { poly, full } where full means every corner sits under one higher photo
+  function coveredMap() {
+    const out = new Map(), sorted = zSorted(), polys = sorted.map(cornersOf);
+    for (let i = 0; i < sorted.length; i++) {
+      let hit = false, full = false;
+      for (let j = i + 1; j < sorted.length; j++) {
+        if (!polysOverlap(polys[i], polys[j])) continue;
+        hit = true;
+        if (polys[i].every(c => pointInPoly(c, polys[j]))) { full = true; break; }
+      }
+      if (hit) out.set(sorted[i].id, { poly: polys[i], full, name: sorted[i].name });
+    }
+    return out;
+  }
+  const overlay = $('overlay');
+  function updateOverlaps() {
+    const on = overlapMode && !viewing && !gridView;
+    const map = on ? coveredMap() : new Map();
+    document.querySelectorAll('#layer-list .lrow').forEach(el => el.classList.toggle('covered', map.has(el.dataset.id)));
+    if (!on) { overlay.innerHTML = ''; return; }
+    overlay.setAttribute('viewBox', `0 0 ${innerWidth} ${innerHeight}`);
+    let out = '';
+    for (const [, { poly, full, name }] of map) {
+      out += `<polygon class="${full ? 'hidden-fully' : ''}" points="${poly.map(c => c.join(',')).join(' ')}"/>`;
+      const [tx, ty] = poly[0];
+      out += `<text x="${tx + 6}" y="${ty + 16}">${full ? 'hidden' : 'covered'}${name ? ' · ' + escapeHTML(name) : ''}</text>`;
+    }
+    overlay.innerHTML = out;
+  }
+
+  // ----- Layers panel: top layer first, drag to reorder, click to select, lock per row -----
+  const layerList = $('layer-list');
+  function renderLayers() {
+    if (!layersOpen) return;
+    layerList.innerHTML = '';
+    if (!photos.length) { layerList.innerHTML = '<p class="empty">No photos yet.</p>'; return; }
+    zSorted().reverse().forEach((p, i, arr) => {
+      const row = document.createElement('div');
+      row.className = 'lrow' + (selectedIds.has(p.id) ? ' selected' : '');
+      row.dataset.id = p.id; row.draggable = true;
+      row.innerHTML = `<img data-for="${p.id}" src="${displaySrc(p)}" alt=""><span class="lname">${escapeHTML(p.name || 'Photo ' + (arr.length - i))}</span><button class="llock${p.locked ? ' on' : ''}" title="${p.locked ? 'Unlock' : 'Lock'}">${p.locked ? '🔒' : '🔓'}</button>`;
+      layerList.appendChild(row);
+    });
+  }
+  const escapeHTML = t => t.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  let layerDragId = null;
+  layerList.addEventListener('click', e => {
+    const row = e.target.closest('.lrow'); if (!row) return;
+    const p = byId(row.dataset.id);
+    if (e.target.closest('.llock')) { pushHistory(); p.locked = !p.locked; select(p.id); render(); return; }
+    select(p.id, e.shiftKey); renderLayers();
+  });
+  layerList.addEventListener('dragstart', e => { const row = e.target.closest('.lrow'); if (!row) return; layerDragId = row.dataset.id; row.classList.add('ghost'); e.dataTransfer.effectAllowed = 'move'; });
+  layerList.addEventListener('dragover', e => {
+    if (!layerDragId) return; e.preventDefault();
+    layerList.querySelectorAll('.over').forEach(r => r.classList.remove('over'));
+    const row = e.target.closest('.lrow'); if (row && row.dataset.id !== layerDragId) row.classList.add('over');
+  });
+  layerList.addEventListener('drop', e => {
+    if (!layerDragId) return; e.preventDefault();
+    const row = e.target.closest('.lrow');
+    if (row && row.dataset.id !== layerDragId) {
+      pushHistory();
+      const top = zSorted().reverse(); // display order
+      const from = top.findIndex(p => p.id === layerDragId), to = top.findIndex(p => p.id === row.dataset.id);
+      const [moved] = top.splice(from, 1); top.splice(to, 0, moved);
+      top.forEach((p, i) => { p.z = top.length - 1 - i; });
+      render();
+    }
+    layerDragId = null;
+  });
+  layerList.addEventListener('dragend', () => { layerDragId = null; layerList.querySelectorAll('.ghost,.over').forEach(r => r.classList.remove('ghost', 'over')); });
+  function applyAction(p, act) {
+    if (act === 'remove') {
+      if (p.locked) { toast('That photo is locked. Unlock it first to remove it.'); return true; }
+      pushHistory(); photos = photos.filter(q => q !== p); select(null); render(); return true;
+    }
+    return false;
+  }
+  // Slider is logarithmic so small sizes get fine control and large ones stay reachable.
+  const sizer = $('sizer'), sizeRange = $('size-range'), sizeNum = $('size-num');
+  // Sliders record one undo step per drag: snapshot on the first input, commit on release.
+  let sliderStart = null;
+  const beginSlide = () => { if (!sliderStart) sliderStart = snapshot(); };
+  const endSlide = () => { if (sliderStart) { pushHistory(sliderStart); sliderStart = null; } };
+  const wToRange = w => Math.round(1000 * Math.log(w / MIN_W) / Math.log(MAX_W / MIN_W));
+  const rangeToW = v => Math.round(MIN_W * Math.pow(MAX_W / MIN_W, v / 1000));
+  // select(id) replaces the selection; select(id, true) toggles id in/out of the group; select(null) clears
+  function select(id, toggle = false) {
+    if (!id) selectedIds.clear();
+    else if (toggle) { if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id); }
+    else { selectedIds.clear(); selectedIds.add(id); }
+    syncSelection(selectedIds.has(id) ? id : null);
+  }
+  // Reflect the current selection set in the UI; `primary` is the photo the panel edits
+  function syncSelection(primary) {
+    selectedId = primary && selectedIds.has(primary) ? primary : ([...selectedIds].pop() || null);
+    document.querySelectorAll('.selected').forEach(s => s.classList.remove('selected'));
+    for (const sid of selectedIds) document.querySelectorAll(`[data-id="${sid}"]`).forEach(s => s.classList.add('selected'));
+    const p = selectedId && byId(selectedId);
+    sizer.classList.toggle('show', !!p);
+    if (p) {
+      sizeRange.value = wToRange(p.w); sizeNum.value = p.w; tiltRange.value = p.rot; tiltNum.value = p.rot;
+      sizer.classList.toggle('locked', !!p.locked);
+      $('lock-toggle').textContent = p.locked ? 'Unlock' : 'Lock';
+      capInput.value = p.caption || ''; capInput.placeholder = p.name ? `Caption (e.g. ${p.name})` : 'Shown when the photo is opened';
+      noteInput.value = p.note || ''; growNote();
+    }
+  }
+  const capInput = $('cap-input'), noteInput = $('note-input');
+  const growNote = () => { noteInput.style.height = 'auto'; noteInput.style.height = Math.min(noteInput.scrollHeight + 2, innerHeight * 0.4) + 'px'; };
+  noteInput.addEventListener('input', growNote);
+  for (const [el, key] of [[capInput, 'caption'], [noteInput, 'note']]) {
+    el.addEventListener('focus', () => { beginSlide(); });
+    el.addEventListener('input', () => { const p = byId(selectedId); if (p) p[key] = el.value; });
+    el.addEventListener('blur', () => { const p = byId(selectedId); if (p && sliderStart && JSON.stringify(sliderStart.photos.find(q => q.id === p.id)?.[key]) === JSON.stringify(p[key])) sliderStart = null; endSlide(); renderLayers(); });
+  }
+  $('lock-toggle').addEventListener('click', () => {
+    const p = byId(selectedId); if (!p) return;
+    pushHistory(); p.locked = !p.locked; select(p.id); render();
+  });
+  const tiltRange = $('tilt-range'), tiltNum = $('tilt-num');
+  function setTilt(deg) {
+    const p = byId(selectedId); if (!p || p.locked) return;
+    beginSlide();
+    deg = round2(Math.max(-180, Math.min(180, deg)));
+    p.rot = deg; tiltRange.value = deg;
+    if (document.activeElement !== tiltNum) tiltNum.value = deg; // don't rewrite the box while someone is typing in it
+    const el = stage.querySelector(`[data-id="${p.id}"]`);
+    if (el) el.style.transform = `translate(-50%,-50%) rotate(${deg}deg)`;
+  }
+  tiltRange.addEventListener('input', () => setTilt(+tiltRange.value));
+  tiltRange.addEventListener('change', endSlide);
+  tiltNum.addEventListener('input', () => { if (tiltNum.value !== '') setTilt(+tiltNum.value); });
+  tiltNum.addEventListener('change', endSlide);
+  $('tilt-straight').addEventListener('click', () => { setTilt(0); endSlide(); });
+  $('tilt-random').addEventListener('click', () => { setTilt(randRot()); endSlide(); });
+  // Layers: z decides stacking in the web view; the grid keeps its own order
+  function layer(action) {
+    const p = byId(selectedId); if (!p || photos.length < 2) return;
+    const sorted = [...photos].sort((a, b) => (a.z || 0) - (b.z || 0));
+    const i = sorted.indexOf(p);
+    pushHistory();
+    if (action === 'front') p.z = sorted[sorted.length - 1].z + 1;
+    else if (action === 'back') p.z = sorted[0].z - 1;
+    else if (action === 'up' && i < sorted.length - 1) { const q = sorted[i + 1]; [p.z, q.z] = [q.z, p.z]; }
+    else if (action === 'down' && i > 0) { const q = sorted[i - 1]; [p.z, q.z] = [q.z, p.z]; }
+    render();
+  }
+  $('layer-front').addEventListener('click', () => layer('front'));
+  $('layer-back').addEventListener('click', () => layer('back'));
+  $('layer-up').addEventListener('click', () => layer('up'));
+  $('layer-down').addEventListener('click', () => layer('down'));
+  $('both-random').addEventListener('click', () => { setSize(randWidth()); setTilt(randRot()); endSlide(); });
+  async function turn(deg) {
+    const p = byId(selectedId); if (!p || p.locked) return;
+    pushHistory();
+    p.src = await bakeRotate(p.src, deg);
+    p.ar = deg % 180 ? 1 / (p.ar || 1.5) : p.ar;
+    render();
+  }
+  $('turn-cw').addEventListener('click', () => turn(90));
+  $('turn-ccw').addEventListener('click', () => turn(-90));
+
+  // Re-encode an image rotated by a multiple of 90° so every view (and the saved file) sees it upright.
+  function bakeRotate(src, deg) {
+    return new Promise(res => {
+      const im = new Image();
+      im.onload = () => {
+        const d = ((deg % 360) + 360) % 360;
+        const c = document.createElement('canvas');
+        const swap = d === 90 || d === 270;
+        c.width = swap ? im.naturalHeight : im.naturalWidth;
+        c.height = swap ? im.naturalWidth : im.naturalHeight;
+        const g = c.getContext('2d');
+        g.translate(c.width / 2, c.height / 2); g.rotate(d * Math.PI / 180);
+        g.drawImage(im, -im.naturalWidth / 2, -im.naturalHeight / 2);
+        res(src.startsWith('data:image/png') ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.92));
+      };
+      im.onerror = () => res(src);
+      im.src = src;
+    });
+  }
+  sizeRange.addEventListener('change', endSlide);
+  function setSize(w) {
+    const p = byId(selectedId); if (!p || p.locked) return;
+    beginSlide();
+    p.w = Math.round(Math.max(MIN_W, Math.min(MAX_W, w)));
+    sizeRange.value = wToRange(p.w);
+    if (document.activeElement !== sizeNum) sizeNum.value = p.w;
+    const el = stage.querySelector(`[data-id="${p.id}"]`); if (el) el.style.width = p.w + 'px';
+    drawWeb();
+  }
+  sizeRange.addEventListener('input', () => setSize(rangeToW(+sizeRange.value)));
+  sizeNum.addEventListener('input', () => { if (sizeNum.value !== '') setSize(+sizeNum.value); });
+  sizeNum.addEventListener('change', () => { setSize(+sizeNum.value || MIN_W); sizeNum.value = byId(selectedId)?.w ?? ''; endSlide(); });
+  // "Reasonable" random uses the same ranges new photos get (120–640 px, ±20°), so results always fit the web
+  $('size-random').addEventListener('click', () => { setSize(randWidth()); endSlide(); });
+  const lightCap = lightbox.querySelector('figcaption');
+  function openLightbox(p) {
+    lightImg.src = fullSrc(p); lightImg.alt = p.caption || '';
+    const cap = (p.caption || '').trim(), note = (p.note || '').trim();
+    lightCap.innerHTML = (cap ? `<div class="cap">${escapeHTML(cap)}</div>` : '') + (note ? `<div class="note">${escapeHTML(note)}</div>` : '');
+    lightbox.querySelector('figure').classList.toggle('has-text', !!(cap || note));
+    applyLightLayout();
+    lightbox.classList.add('open');
+  }
+  function applyLightLayout() {
+    const fig = lightbox.querySelector('figure');
+    fig.classList.remove('lay-left', 'lay-right', 'lay-stack'); fig.classList.add('lay-' + lightLayout);
+    lightCap.style.setProperty('--cap-align', lightText.align);
+    lightCap.style.setProperty('--cap-scale', lightText.size);
+    lightCap.style.setProperty('--cap-width', lightText.width + 'ch');
+    lightbox.querySelectorAll('.lay-switch button[data-lay]').forEach(b => b.classList.toggle('on', b.dataset.lay === lightLayout));
+    lightbox.querySelectorAll('.lay-switch button[data-align]').forEach(b => b.classList.toggle('on', b.dataset.align === lightText.align));
+    $('cap-size').value = Math.round(lightText.size * 100); $('cap-width').value = lightText.width;
+    lightbox.querySelector('.lay-switch').classList.toggle('show', fig.classList.contains('has-text'));
+    fitCaption();
+  }
+  // In column mode the text box never runs past the photo: cap it at the photo's rendered height
+  function fitCaption() {
+    const side = lightLayout !== 'stack' && innerWidth >= 900;
+    const r = lightImg.getBoundingClientRect();
+    lightbox.querySelector('.lay-switch .grp.wid').classList.toggle('dim', !side);
+    if (!side) {
+      // Below: the text box is exactly as wide as the photo, never wider
+      lightCap.style.maxHeight = '';
+      lightCap.style.width = r.width > 50 ? r.width + 'px' : ''; lightCap.style.maxWidth = r.width > 50 ? r.width + 'px' : '';
+      return;
+    }
+    lightCap.style.width = ''; lightCap.style.maxWidth = '';
+    lightCap.style.maxHeight = r.height > 50 ? r.height + 'px' : '';
+  }
+  lightImg.addEventListener('load', fitCaption);
+  addEventListener('resize', () => { if (lightbox.classList.contains('open')) fitCaption(); });
+  const laySwitch = lightbox.querySelector('.lay-switch');
+  const lightChange = () => { if (!PUBLISHED) pushHistory(); }; // editor: saved default; viewers: just their session
+  laySwitch.addEventListener('click', e => {
+    e.stopPropagation();
+    const b = e.target.closest('button'); if (!b) return;
+    lightChange();
+    if (b.dataset.lay) lightLayout = b.dataset.lay;
+    if (b.dataset.align) lightText.align = b.dataset.align;
+    applyLightLayout();
+  });
+  laySwitch.addEventListener('pointerdown', e => e.stopPropagation());
+  let capSlideStart = null;
+  const capSlide = (key, v) => { if (!capSlideStart) capSlideStart = snapshot(); lightText[key] = v; applyLightLayout(); };
+  const capSlideEnd = () => { if (capSlideStart && !PUBLISHED) pushHistory(capSlideStart); capSlideStart = null; };
+  $('cap-size').addEventListener('input', e => capSlide('size', +e.target.value / 100));
+  $('cap-width').addEventListener('input', e => capSlide('width', +e.target.value));
+  $('cap-size').addEventListener('change', capSlideEnd);
+  $('cap-width').addEventListener('change', capSlideEnd);
+  lightbox.addEventListener('click', e => { if (!e.target.closest('figcaption') && !e.target.closest('.lay-switch')) lightbox.classList.remove('open'); });
+
+  // ---------- Title editing ----------
+  if (!PUBLISHED) {
+    // Focus whichever title is on screen and select its text for retyping
+    // ----- Theme popover -----
+    const themeBox = $('theme');
+    $('theme-toggle').addEventListener('click', e => { themeBox.classList.toggle('open'); e.currentTarget.classList.toggle('on', themeBox.classList.contains('open')); });
+    const SWATCHES = ['#23262C', '#141518', '#1B2436', '#2E2A26', '#4A4E57', '#B9B2A5', '#EFE9DC', '#FFFFFF'];
+    $('bg-swatches').innerHTML = SWATCHES.map(c => `<button class="swatch" data-c="${c}" style="background:${c}" title="${c}"></button>`).join('');
+    $('bg-swatches').addEventListener('click', e => { const b = e.target.closest('.swatch'); if (!b) return; pushHistory(); theme.bg = b.dataset.c; applyTheme(); });
+    $('bg-color').addEventListener('input', e => { beginSlide(); theme.bg = e.target.value; applyTheme(); });
+    $('bg-color').addEventListener('change', endSlide);
+    $('bg-light').addEventListener('input', e => { beginSlide(); const [h, sat] = hexToHsl(theme.bg); theme.bg = hslToHex(h, sat, +e.target.value / 100); applyTheme(); });
+    $('bg-light').addEventListener('change', endSlide);
+    $('web-color').addEventListener('input', e => { beginSlide(); theme.web = e.target.value; applyTheme(); });
+    $('web-color').addEventListener('change', endSlide);
+    $('web-auto').addEventListener('change', e => { pushHistory(); theme.web = e.target.checked ? null : $('web-color').value; applyTheme(); });
+    $('web-strength').addEventListener('input', e => { beginSlide(); theme.webStrength = +e.target.value / 100; applyTheme(); });
+    $('web-strength').addEventListener('change', endSlide);
+    $('theme-reset').addEventListener('click', () => { pushHistory(); theme = { ...DEFAULT_THEME }; applyTheme(); });
+
+
+    $('overlap-toggle').addEventListener('click', e => { overlapMode = !overlapMode; e.currentTarget.classList.toggle('on', overlapMode); updateOverlaps(); });
+    $('layers-toggle').addEventListener('click', e => { layersOpen = !layersOpen; e.currentTarget.classList.toggle('on', layersOpen); document.body.classList.toggle('layers-open', layersOpen); renderLayers(); updateOverlaps(); });
+    $('rename').addEventListener('click', () => {
+      const h = gridView ? document.querySelector('#gallery [data-title]') : hub.querySelector('[data-title]');
+      h.focus();
+      const r = document.createRange(); r.selectNodeContents(h);
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    });
+    document.querySelectorAll('[data-title]').forEach(h => {
+      h.contentEditable = 'true';
+      h.addEventListener('paste', e => { e.preventDefault(); document.execCommand('insertText', false, (e.clipboardData.getData('text/plain') || '').replace(/\s+/g, ' ')); });
+      h.addEventListener('blur', () => { const t = h.textContent.trim() || 'Photographs'; if (t !== title) { pushHistory(); title = t; } render(); });
+      h.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); h.blur(); } });
+    });
+  }
+
+  // ---------- Web view: drag to move ----------
+  let drag = null;
+  stage.addEventListener('pointerdown', e => {
+    const el = e.target.closest('.photo');
+    if (!el || e.target.tagName === 'BUTTON') return;
+    e.stopPropagation();
+    if (viewing) return;
+    const p = byId(el.dataset.id);
+    if (e.shiftKey) { select(p.id, true); renderLayers(); return; } // Shift+click: add to / remove from the group
+    if (!selectedIds.has(p.id)) select(p.id);
+    renderLayers();
+    // Drag moves every selected, unlocked photo together
+    const items = [...selectedIds].map(byId).filter(q => q && !q.locked).map(q => ({ p: q, ox: q.x, oy: q.y, el: stage.querySelector(`[data-id="${q.id}"]`) }));
+    if (!items.length) return;
+    drag = { items, sx: e.clientX, sy: e.clientY, before: snapshot(), moved: false };
+    el.setPointerCapture(e.pointerId);
+    items.forEach(it => it.el && it.el.classList.add('dragging'));
+  });
+  stage.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dx = Math.round((e.clientX - drag.sx) / view.s), dy = Math.round((e.clientY - drag.sy) / view.s);
+    if (dx || dy) drag.moved = true;
+    for (const it of drag.items) {
+      it.p.x = it.ox + dx; it.p.y = it.oy + dy;
+      const sc = toScreen(it.p);
+      if (it.el) { it.el.style.left = sc.cx + 'px'; it.el.style.top = sc.cy + 'px'; }
+    }
+    drawWeb();
+    if (overlapMode) updateOverlaps();
+  });
+  const endDrag = () => {
+    if (!drag) return;
+    drag.items.forEach(it => it.el && it.el.classList.remove('dragging'));
+    if (drag.moved) pushHistory(drag.before);
+    drag = null;
+  };
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
+  stage.addEventListener('click', e => {
+    const el = e.target.closest('.photo'); if (!el) return;
+    const p = byId(el.dataset.id);
+    if (applyAction(p, e.target.dataset.act)) return;
+    if (viewing) openLightbox(p);
+  });
+
+  // ---------- Grid view: drag to reorder ----------
+  let reorderId = null;
+  grid.addEventListener('dragstart', e => {
+    const t = e.target.closest('.tile'); if (!t || viewing) return;
+    reorderId = t.dataset.id; t.classList.add('ghost');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', reorderId);
+  });
+  grid.addEventListener('dragover', e => {
+    if (!reorderId) return;
+    e.preventDefault();
+    const t = e.target.closest('.tile');
+    document.querySelectorAll('.tile.over').forEach(x => x.classList.remove('over'));
+    if (t && t.dataset.id !== reorderId) t.classList.add('over');
+  });
+  grid.addEventListener('drop', e => {
+    if (!reorderId) return;
+    e.preventDefault();
+    const t = e.target.closest('.tile');
+    if (t && t.dataset.id !== reorderId) {
+      pushHistory();
+      const from = photos.findIndex(p => p.id === reorderId), to = photos.findIndex(p => p.id === t.dataset.id);
+      const [moved] = photos.splice(from, 1); photos.splice(to, 0, moved);
+    }
+    reorderId = null; render();
+  });
+  grid.addEventListener('dragend', () => { reorderId = null; document.querySelectorAll('.ghost,.over').forEach(x => x.classList.remove('ghost', 'over')); });
+  grid.addEventListener('click', e => {
+    const t = e.target.closest('.tile'); if (!t) return;
+    const p = byId(t.dataset.id);
+    if (applyAction(p, e.target.dataset.act)) return;
+    if (viewing) openLightbox(p); else select(p.id);
+  });
+
+  // ---------- Keys ----------
+  addEventListener('keydown', e => {
+    if (e.target.isContentEditable || ['TEXTAREA', 'INPUT'].includes(e.target.tagName)) return;
+    if (e.key === 'Escape') { lightbox.classList.remove('open'); $('panel').classList.remove('open'); select(null); render(); }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selectedIds.size && !viewing) {
+      const doomed = [...selectedIds].filter(id => byId(id) && !byId(id).locked);
+      if (!doomed.length) return;
+      pushHistory(); photos = photos.filter(q => !doomed.includes(q.id)); select(null); render();
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !PUBLISHED) { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y' && !PUBLISHED) { e.preventDefault(); redo(); }
+  });
+
+  // Row-height slider: available to viewers too, since the best density depends on their screen
+  $('grid-range').value = Math.round(gridScale * 100);
+  $('grid-range').addEventListener('input', e => { if (!PUBLISHED) beginSlide(); gridScale = +e.target.value / 100; renderGrid(); });
+  $('grid-range').addEventListener('change', () => { if (!PUBLISHED) endSlide(); });
+
+  // ---------- Zones ----------
+  const zoneSvg = $('zone-svg'), zoneLabels = $('zone-labels'), zoneHandles = $('zone-handles');
+  let selectedZone = null; // id of the zone whose corner handles are shown
+  function setZoneText(px) {
+    zoneText = Math.min(60, Math.max(10, Math.round(px)));
+    document.documentElement.style.setProperty('--zone-text', zoneText + 'px');
+
+  }
+  function setZonesVisible(on) { zonesVisible = on; document.body.classList.toggle('zones-on', on); const b = $('zones-toggle'); if (b) b.classList.toggle('on', on); renderZones(); if (gridView) renderGrid(); }
+  function setZoneDraw(on) {
+    zoneDraw = on; document.body.classList.toggle('zone-draw', on); const b = $('zone-draw-btn'); if (b) b.classList.toggle('on', on);
+    if (!on) { draft = null; renderZones(); }
+  }
+  function finishZone() {
+    if (!draft || draft.pts.length < 3) { setZoneDraw(false); return; }
+    pushHistory();
+    const z = { id: crypto.randomUUID(), pts: draft.pts, label: 'Zone ' + (zones.length + 1), color: ZONE_COLORS[zones.length % ZONE_COLORS.length], size: zoneText, lx: 0, ly: 0, rot: 0, locked: false };
+    zones.push(z); draft = null; selectedZone = z.id; setZoneDraw(false); renderZones();
+    const nm = zoneLabels.querySelector(`.zone-label[data-id="${z.id}"] .zname`);
+    if (nm) { nm.focus(); const rg = document.createRange(); rg.selectNodeContents(nm); getSelection().removeAllRanges(); getSelection().addRange(rg); }
+  }
+  $('zones-toggle').addEventListener('click', () => { setZonesVisible(!zonesVisible); if (!zonesVisible) setZoneDraw(false); });
+  if (!PUBLISHED) $('zone-draw-btn').addEventListener('click', () => { if (!zonesVisible) setZonesVisible(true); setZoneDraw(!zoneDraw); });
+  addEventListener('keydown', e => {
+    if (!zoneDraw) return;
+    if (e.key === 'Escape') { e.stopImmediatePropagation(); setZoneDraw(false); }
+    if (e.key === 'Enter' && draft && draft.pts.length >= 3) { e.preventDefault(); finishZone(); }
+  }, true);
+  // The name sits at the shape's centre of area (falls back to the average of the corners for degenerate shapes)
+  const labelAnchor = pts => {
+    let A = 0, cx = 0, cy = 0;
+    for (let i = 0; i < pts.length; i++) { const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length], f = x1 * y2 - x2 * y1; A += f; cx += (x1 + x2) * f; cy += (y1 + y2) * f; }
+    if (Math.abs(A) < 1) return [pts.reduce((a, q) => a + q[0], 0) / pts.length, pts.reduce((a, q) => a + q[1], 0) / pts.length];
+    return [cx / (3 * A), cy / (3 * A)];
+  };
+  function renderZones() {
+    if (!zonesVisible && !draft) { zoneSvg.innerHTML = ''; zoneLabels.innerHTML = ''; return; }
+    const ox = hubX(), oy = hubY(), edit = !viewing && !PUBLISHED;
+    let svg = '', labels = '', handles = '';
+    const hr = 7 / view.s; // handle radius in world units → constant 7px on screen
+    for (const z of zones) {
+      const pts = z.pts.map(([x, y]) => `${ox + x},${oy + y}`).join(' ');
+      svg += `<g data-id="${z.id}" class="${z.id === selectedZone ? 'sel' : ''}" style="--zc:${z.color}"><polygon points="${pts}"/></g>`;
+      if (edit && z.id === selectedZone && !z.locked) {
+        handles += `<g data-id="${z.id}" style="--zc:${z.color}">` + z.pts.map(([x, y], i) => `<circle class="vtx" data-i="${i}" cx="${ox + x}" cy="${oy + y}" r="${hr}"/>`).join('') + '</g>';
+      }
+      const [ax, ay] = labelAnchor(z.pts);
+      labels += `<div class="zone-label${z.locked ? ' locked' : ''}" data-id="${z.id}" style="--zc:${z.color};--zone-text:${z.size || zoneText}px;left:${ox + ax + (z.lx || 0)}px;top:${oy + ay + (z.ly || 0)}px">` +
+        `<div class="zpill" style="transform:rotate(${z.rot || 0}deg)"><span class="zname"${edit ? ' contenteditable="true" spellcheck="false"' : ''}>${escapeHTML(z.label)}</span></div>` +
+        (edit ? `<span class="ztools"><label class="zctl" title="Text size for this zone"><span>Size</span><input type="range" class="zsize" min="10" max="60" step="1" value="${z.size || zoneText}"><output>${z.size || zoneText}px</output></label><label class="zctl" title="Tilt (double-click the slider to straighten)"><span>Tilt</span><input type="range" class="zrot" min="-90" max="90" step="0.01" value="${z.rot || 0}"><output>${z.rot || 0}°</output></label><button class="zreset" title="Reset size to ${zoneText}px and tilt to 0°">Reset</button><input type="color" value="${z.color}" title="Zone colour"><button class="zlock" title="${z.locked ? 'Unlock zone' : 'Lock zone (shape and name can\'t be moved)'}">${z.locked ? 'Unlock' : 'Lock'}</button><button class="zdel" title="Remove zone">×</button></span>` : '') + `</div>`;
+    }
+    if (draft && draft.pts.length) {
+      const pl = draft.pts.map(([x, y]) => `${ox + x},${oy + y}`).join(' ');
+      svg += `<g class="draft"><polyline points="${pl}"/>`;
+      if (draft.cursor) { const [lx, ly] = draft.pts[draft.pts.length - 1]; svg += `<line x1="${ox + lx}" y1="${oy + ly}" x2="${ox + draft.cursor[0]}" y2="${oy + draft.cursor[1]}"/>`; }
+      draft.pts.forEach(([x, y], i) => { svg += `<circle class="${i === 0 ? 'first' : ''}" cx="${ox + x}" cy="${oy + y}" r="${i === 0 ? 8 : 5}"/>`; });
+      svg += '</g>';
+    }
+    zoneSvg.setAttribute('viewBox', `0 0 ${innerWidth} ${innerHeight}`); zoneHandles.setAttribute('viewBox', `0 0 ${innerWidth} ${innerHeight}`);
+    zoneSvg.innerHTML = svg; zoneLabels.innerHTML = labels; zoneHandles.innerHTML = handles;
+  }
+  function selectZone(id) { selectedZone = id; renderZones(); }
+  // Move a whole zone (drag its fill) or one corner (drag a point); Alt+click a point removes it; double-click an edge adds one
+  let zoneDrag = null;
+  zoneSvg.addEventListener('contextmenu', e => { if (!viewing && !PUBLISHED && e.target.closest('g[data-id]')) e.preventDefault(); });
+  zoneSvg.addEventListener('pointerdown', e => {
+    if (viewing || PUBLISHED || draft) return;
+    if (e.button !== 0 && !(e.ctrlKey || e.metaKey)) return;
+    const g = e.target.closest('g[data-id]'); if (!g) return;
+    const z = zones.find(q => q.id === g.dataset.id); if (!z) return;
+    e.stopPropagation();
+    if (selectedZone !== z.id) selectZone(z.id);
+    if (z.locked) return;
+    if (e.ctrlKey || e.metaKey) { addZonePointAt(z, e.clientX, e.clientY); return; } // Ctrl+click (Cmd on Mac): new point on the nearest edge
+    zoneDrag = { z, i: -1, sx: e.clientX, sy: e.clientY, orig: z.pts.map(q => [...q]), before: snapshot(), moved: false };
+    zoneSvg.setPointerCapture(e.pointerId);
+  });
+  zoneHandles.addEventListener('pointerdown', e => {
+    if (viewing || PUBLISHED || draft) return;
+    const vtx = e.target.closest('circle.vtx'); if (!vtx) return;
+    const z = zones.find(q => q.id === vtx.closest('g').dataset.id); if (!z) return;
+    e.stopPropagation();
+    if (z.locked) return;
+    if (e.altKey) { if (z.pts.length > 3) { pushHistory(); z.pts.splice(+vtx.dataset.i, 1); renderZones(); } return; }
+    zoneDrag = { z, i: +vtx.dataset.i, sx: e.clientX, sy: e.clientY, orig: z.pts.map(q => [...q]), before: snapshot(), moved: false, handle: vtx };
+    zoneHandles.setPointerCapture(e.pointerId); vtx.classList.add('dragging');
+  });
+  const zoneMove = e => {
+    if (!zoneDrag) return;
+    const dx = Math.round((e.clientX - zoneDrag.sx) / view.s), dy = Math.round((e.clientY - zoneDrag.sy) / view.s);
+    if (dx || dy) zoneDrag.moved = true;
+    const z = zoneDrag.z;
+    if (zoneDrag.i >= 0) z.pts[zoneDrag.i] = [zoneDrag.orig[zoneDrag.i][0] + dx, zoneDrag.orig[zoneDrag.i][1] + dy];
+    else z.pts = zoneDrag.orig.map(([x, y]) => [x + dx, y + dy]);
+    renderZones();
+  };
+  const endZoneDrag = () => { if (zoneDrag) { if (zoneDrag.moved) pushHistory(zoneDrag.before); zoneDrag = null; } };
+  for (const layer of [zoneSvg, zoneHandles]) { layer.addEventListener('pointermove', zoneMove); layer.addEventListener('pointerup', endZoneDrag); layer.addEventListener('pointercancel', endZoneDrag); }
+  function addZonePointAt(z, clientX, clientY) {
+    const c = toWorld(clientX, clientY);
+    // insert the new corner on the nearest edge
+    let best = 0, bestD = Infinity;
+    z.pts.forEach(([x1, y1], i) => {
+      const [x2, y2] = z.pts[(i + 1) % z.pts.length], L = Math.hypot(x2 - x1, y2 - y1) || 1;
+      const t = Math.max(0, Math.min(1, ((c.x - x1) * (x2 - x1) + (c.y - y1) * (y2 - y1)) / (L * L)));
+      const d = Math.hypot(c.x - (x1 + t * (x2 - x1)), c.y - (y1 + t * (y2 - y1)));
+      if (d < bestD) { bestD = d; best = i; }
+    });
+    pushHistory(); z.pts.splice(best + 1, 0, [Math.round(c.x), Math.round(c.y)]); renderZones();
+  }
+  let labelDrag = null;
+  zoneLabels.addEventListener('pointerdown', e => {
+    if (viewing || PUBLISHED) return;
+    e.stopPropagation();
+    const pill = e.target.closest('.zpill'); if (!pill) return;
+    const lab = pill.closest('.zone-label'), z = zones.find(q => q.id === lab.dataset.id);
+    if (!z) return;
+    const nm = lab.querySelector('.zname');
+    if (document.activeElement === nm || z.locked) return;           // already editing, or locked: leave the caret alone
+    e.preventDefault();                                              // don't start editing yet — decide on release
+    labelDrag = { z, lab, nm, sx: e.clientX, sy: e.clientY, ox: z.lx || 0, oy: z.ly || 0, before: snapshot(), moved: false };
+    lab.setPointerCapture(e.pointerId);
+  });
+  zoneLabels.addEventListener('pointermove', e => {
+    if (!labelDrag) return;
+    if (!labelDrag.moved && Math.hypot(e.clientX - labelDrag.sx, e.clientY - labelDrag.sy) < 4) return; // still a click so far
+    labelDrag.moved = true; labelDrag.lab.classList.add('dragging');
+    const dx = Math.round((e.clientX - labelDrag.sx) / view.s), dy = Math.round((e.clientY - labelDrag.sy) / view.s);
+    const z = labelDrag.z; z.lx = labelDrag.ox + dx; z.ly = labelDrag.oy + dy;
+    const [ax, ay] = labelAnchor(z.pts);
+    labelDrag.lab.style.left = hubX() + ax + z.lx + 'px'; labelDrag.lab.style.top = hubY() + ay + z.ly + 'px';
+  });
+  const endLabelDrag = e => {
+    if (!labelDrag) return;
+    const d = labelDrag; labelDrag = null; d.lab.classList.remove('dragging');
+    if (d.moved) { pushHistory(d.before); return; }
+    // A click without movement: start editing the name, with the caret where the click landed
+    d.nm.focus();
+    try {
+      const r = document.caretRangeFromPoint ? document.caretRangeFromPoint(e.clientX, e.clientY) : null;
+      const sel = getSelection(); sel.removeAllRanges();
+      if (r && d.nm.contains(r.startContainer)) sel.addRange(r); else { const rg = document.createRange(); rg.selectNodeContents(d.nm); rg.collapse(false); sel.addRange(rg); }
+    } catch {}
+  };
+  zoneLabels.addEventListener('pointerup', endLabelDrag);
+  zoneLabels.addEventListener('pointercancel', endLabelDrag);
+  zoneLabels.addEventListener('input', e => {
+    if (e.target.classList.contains('zsize')) {
+      const z = zones.find(q => q.id === e.target.closest('.zone-label').dataset.id); if (!z) return;
+      beginSlide(); z.size = +e.target.value; e.target.closest('.zone-label').style.setProperty('--zone-text', z.size + 'px'); e.target.nextElementSibling.value = z.size + 'px'; return;
+    }
+    if (e.target.classList.contains('zrot')) {
+      const z = zones.find(q => q.id === e.target.closest('.zone-label').dataset.id); if (!z) return;
+      beginSlide(); z.rot = round2(+e.target.value); e.target.closest('.zone-label').querySelector('.zpill').style.transform = `rotate(${z.rot}deg)`; e.target.nextElementSibling.value = z.rot + '°'; return;
+    }
+    const inp = e.target.closest('input[type=color]'); if (!inp) return;
+    const z = zones.find(q => q.id === inp.closest('.zone-label').dataset.id); if (!z) return;
+    if (!zoneColorStart) zoneColorStart = snapshot();
+    z.color = inp.value;
+    zoneSvg.querySelector(`g[data-id="${z.id}"]`)?.style.setProperty('--zc', z.color); inp.closest('.zone-label').style.setProperty('--zc', z.color);
+  });
+  let zoneColorStart = null;
+  zoneLabels.addEventListener('change', e => {
+    if (e.target.classList.contains('zsize') || e.target.classList.contains('zrot')) { endSlide(); return; }
+    if (e.target.closest('input[type=color]') && zoneColorStart) { pushHistory(zoneColorStart); zoneColorStart = null; }
+  });
+  zoneLabels.addEventListener('dblclick', e => {
+    const r = e.target.closest('.zrot'); if (!r) return;
+    const z = zones.find(q => q.id === r.closest('.zone-label').dataset.id); if (!z || !z.rot) return;
+    pushHistory(); z.rot = 0; r.value = 0; r.nextElementSibling.value = '0°'; r.closest('.zone-label').querySelector('.zpill').style.transform = 'rotate(0deg)';
+  });
+  zoneLabels.addEventListener('click', e => {
+    const resetBtn = e.target.closest('.zreset');
+    if (resetBtn) {
+      const z = zones.find(q => q.id === resetBtn.closest('.zone-label').dataset.id); if (!z) return;
+      if (z.size === zoneText && !z.rot) return;
+      pushHistory(); z.size = zoneText; z.rot = 0; renderZones(); return;
+    }
+    const lockBtn = e.target.closest('.zlock');
+    if (lockBtn) { const z = zones.find(q => q.id === lockBtn.closest('.zone-label').dataset.id); if (z) { pushHistory(); z.locked = !z.locked; renderZones(); } return; }
+    const del = e.target.closest('.zdel'); if (!del) return;
+    const id = del.closest('.zone-label').dataset.id;
+    pushHistory(); zones = zones.filter(q => q.id !== id); if (selectedZone === id) selectedZone = null; renderZones();
+  });
+  zoneLabels.addEventListener('focusout', e => {
+    const nm = e.target.closest('.zname'); if (!nm) return;
+    const z = zones.find(q => q.id === nm.closest('.zone-label').dataset.id); if (!z) return;
+    const t = nm.textContent.trim() || 'Zone';
+    if (t !== z.label) { pushHistory(); z.label = t; }
+    nm.textContent = t;
+  });
+  zoneLabels.addEventListener('keydown', e => { if (e.target.closest('.zname') && e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
+
+  // ---------- Toolbar show / hide (editor and viewers alike) ----------
+  function setBarHidden(on) { document.body.classList.toggle('bar-hidden', on); }
+  $('bar-hide').addEventListener('click', () => setBarHidden(true));
+  $('bar-show').addEventListener('click', () => setBarHidden(false));
+  addEventListener('keydown', e => {
+    if (e.key.toLowerCase() !== 'h' || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target.isContentEditable || ['TEXTAREA', 'INPUT', 'SELECT'].includes(e.target.tagName)) return;
+    setBarHidden(!document.body.classList.contains('bar-hidden'));
+  });
+
+  // ---------- Layout toggle (web / grid) ----------
+  const layoutBtn = $('layout-toggle');
+  function setGridView(on) {
+    gridView = on;
+    document.body.classList.toggle('grid-view', on);
+    layoutBtn.textContent = on ? 'Web' : 'Grid';
+    window.scrollTo(0, 0);
+    render();
+  }
+  layoutBtn.addEventListener('click', () => setGridView(!gridView));
+  let resizeRaf = 0;
+  addEventListener('resize', () => { cancelAnimationFrame(resizeRaf); resizeRaf = requestAnimationFrame(render); });
+
+  // ---------- Editing tools (hidden in published pages) ----------
+  if (!PUBLISHED) {
+    // ----- Reading files (JPG/PNG/WebP directly; DNG/TIFF via embedded JPEG preview) -----
+    const blobToDataURL = blob => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(blob); });
+    const canDecode = src => new Promise(res => { const im = new Image(); im.onload = () => res(im.naturalWidth > 0); im.onerror = () => res(false); im.src = src; });
+
+    // Walk the TIFF structure of a DNG and return candidate JPEG previews, largest first.
+    function tiffJpegPreviews(buf) {
+      const dv = new DataView(buf);
+      if (buf.byteLength < 8) return [];
+      const bom = dv.getUint16(0);
+      const le = bom === 0x4949; if (!le && bom !== 0x4D4D) return [];
+      const u16 = o => dv.getUint16(o, le), u32 = o => dv.getUint32(o, le);
+      if (u16(2) !== 42) return [];
+      const found = [], seen = new Set();
+      let orientation = 1;
+      function readIFD(off, depth) {
+        if (!off || off + 2 > buf.byteLength || seen.has(off) || depth > 6) return;
+        seen.add(off);
+        const n = u16(off); if (off + 2 + n * 12 > buf.byteLength) return;
+        const t = {};
+        const subs = [];
+        for (let i = 0; i < n; i++) {
+          const e = off + 2 + i * 12, tag = u16(e), type = u16(e + 2), count = u32(e + 4);
+          const sz = ({1:1,2:1,3:2,4:4,7:1,13:4}[type] || 0) * count;
+          const vo = sz <= 4 ? e + 8 : u32(e + 8);
+          const val = k => (type === 3 ? u16(vo + k * 2) : u32(vo + k * 4));
+          if (tag === 330 || tag === 34665) for (let k = 0; k < count; k++) subs.push(val(k)); // SubIFDs, Exif IFD
+          else if (tag === 274 && depth === 0) orientation = val(0);
+          else if ([254, 256, 259, 273, 279, 513, 514].includes(tag)) t[tag] = count === 1 ? val(0) : { count, val };
+        }
+        // JPEG-compressed strip(s), not the raw mosaic itself
+        if (t[259] === 7 || t[259] === 6) {
+          const so = t[273], sb = t[279];
+          if (typeof so === 'number' && typeof sb === 'number') found.push({ off: so, len: sb, w: t[256] || 0, raw: t[254] === 0 });
+        }
+        if (typeof t[513] === 'number' && typeof t[514] === 'number') found.push({ off: t[513], len: t[514], w: 0, raw: false });
+        subs.forEach(s => readIFD(s, depth + 1));
+        const next = u32(off + 2 + n * 12); readIFD(next, depth + 1);
+      }
+      readIFD(u32(4), 0);
+      const previews = found
+        .filter(c => c.off + c.len <= buf.byteLength && c.len > 100 && dv.getUint16(c.off) === 0xFFD8)
+        .sort((a, b) => (a.raw - b.raw) || (b.w - a.w) || (b.len - a.len));
+      return { previews, orientation };
+    }
+    const ORIENT_DEG = { 3: 180, 6: 90, 8: 270 };
+
+    // Imported photos keep up to 4000px on the long side at 95% JPEG quality
+    const shrink = src => resample(src, 4000, 0.95);
+    // Re-encode a data URL so its longest side is at most `edge` px (no-op if already smaller)
+    function resample(src, edge, q) {
+      return new Promise(res => {
+        const im = new Image();
+        im.onload = () => {
+          const w = im.naturalWidth, h = im.naturalHeight, k = Math.min(1, edge / Math.max(w, h));
+          if (k === 1) { res(src); return; }
+          const c = document.createElement('canvas'); c.width = Math.round(w * k); c.height = Math.round(h * k);
+          c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+          res(src.startsWith('data:image/png') ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', q));
+        };
+        im.onerror = () => res(src);
+        im.src = src;
+      });
+    }
+    async function fileToSrc(f) {
+      const direct = await blobToDataURL(f);
+      if (f.type.startsWith('image/') && !/tiff|x-adobe-dng/i.test(f.type) && await canDecode(direct)) return shrink(direct);
+      const buf = await f.arrayBuffer();
+      const { previews, orientation } = tiffJpegPreviews(buf);
+      for (const c of previews) {
+        const src = await blobToDataURL(new Blob([new Uint8Array(buf, c.off, c.len)], { type: 'image/jpeg' }));
+        if (await canDecode(src)) return shrink(ORIENT_DEG[orientation] ? await bakeRotate(src, ORIENT_DEG[orientation]) : src);
+      }
+      if (await canDecode(direct)) return direct;
+      return null;
+    }
+
+    async function addFiles(files) {
+      const failed = [], before = snapshot(); let added = 0;
+      for (const f of [...files]) {
+        const looksLikeImage = f.type.startsWith('image/') || /\.(dng|tif|tiff|heic|heif|cr2|nef|arw|raf|orf|rw2)$/i.test(f.name);
+        if (!looksLikeImage) continue;
+        let src = null;
+        try { src = await fileToSrc(f); } catch { src = null; }
+        if (!src) { failed.push(f.name); continue; }
+        const pos = scatterPosition(photos.length);
+        const ar = await new Promise(res => { const im = new Image(); im.onload = () => res(im.naturalWidth / im.naturalHeight); im.onerror = () => res(1.5); im.src = src; });
+        photos.push({ id: crypto.randomUUID(), src, x: pos.x, y: pos.y, w: randWidth(), rot: randRot(), ar, z: photos.reduce((m, q) => Math.max(m, q.z || 0), -1) + 1, locked: false, name: f.name.replace(/\.[^.]+$/, ''), caption: '', note: '' });
+        added++; render();
+      }
+      if (added) pushHistory(before);
+      if (failed.length) toast(`Couldn't read ${failed.join(', ')}. Browsers can't show RAW files without an embedded preview; export as JPG and add that instead.`);
+    }
+    $('file').addEventListener('change', e => { addFiles(e.target.files); e.target.value = ''; });
+
+    let dragDepth = 0;
+    addEventListener('dragenter', e => { if (reorderId) return; e.preventDefault(); dragDepth++; document.body.classList.add('dropping'); });
+    addEventListener('dragleave', () => { if (reorderId) return; if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dropping'); } });
+    addEventListener('dragover', e => { if (!reorderId) e.preventDefault(); });
+    addEventListener('drop', e => {
+      if (reorderId) return;
+      e.preventDefault(); dragDepth = 0; document.body.classList.remove('dropping');
+      addFiles(e.dataTransfer.files);
+    });
+
+
+    const shuffleMenu = $('shuffle-menu');
+    $('shuffle').addEventListener('click', e => { e.stopPropagation(); shuffleMenu.classList.toggle('open'); });
+    addEventListener('click', () => shuffleMenu.classList.remove('open'));
+    shuffleMenu.addEventListener('click', e => {
+      const b = e.target.closest('button[data-shuffle]'); if (!b) return;
+      shuffleMenu.classList.remove('open');
+      const mode = b.dataset.shuffle;
+      if (mode === 'size') { pushHistory(); photos.forEach(p => { if (!p.locked) p.w = randWidth(); }); render(); return; }
+      if (mode === 'tilt') { pushHistory(); photos.forEach(p => { if (!p.locked) p.rot = randRot(); }); render(); return; }
+      shuffleAll(mode === 'pos');
+    });
+    function shuffleAll(positionsOnly = false) {
+      pushHistory();
+      const H = REF.h, n = photos.length;
+      const patterns = {
+        spiral: i => scatterPosition(i),
+        rings: i => { const ring = Math.floor(Math.sqrt(i)), k = i - ring * ring, per = 2 * ring + 1;
+          const a = (k / per) * Math.PI * 2 + ring * 0.7, r = 0.14 + ring * 0.13;
+          return { x: Math.cos(a) * r * H * 1.3, y: Math.sin(a) * r * H }; },
+        scatter: () => { const a = Math.random() * Math.PI * 2, r = 0.18 + Math.sqrt(Math.random()) * 0.38;
+          return { x: Math.cos(a) * r * H * 1.4, y: Math.sin(a) * r * H }; },
+      };
+      const names = Object.keys(patterns), place = patterns[names[Math.floor(Math.random() * names.length)]];
+      const order = photos.map((_, i) => i).sort(() => Math.random() - 0.5); // random slot for every photo
+      photos.forEach((p, i) => { if (p.locked) return; const pos = place(order[i]); p.x = pos.x + (Math.random() - 0.5) * 60; p.y = pos.y + (Math.random() - 0.5) * 60; if (!positionsOnly) { p.w = randWidth(); p.rot = randRot(); } });
+      // Push overlapping photos apart and keep everything clear of the hub. Radius = half the photo's diagonal,
+      // so rotated and portrait photos are covered too; afterwards an exact check spreads the layout until nothing touches.
+      const hubR = hub.offsetWidth / 2 + 30;
+      const radius = p => Math.hypot(p.w, p.w / (p.ar || 1.5)) / 2;
+      for (let it = 0; it < 150; it++) {
+        for (const p of photos) {
+          const px = p.x, py = p.y, pr = radius(p);
+          for (const q of photos) {
+            if (q === p) continue;
+            const qx = q.x, qy = q.y, need = pr + radius(q) + 24;
+            let dx = qx - px, dy = qy - py, d = Math.hypot(dx, dy) || 1;
+            if (d < need && !(p.locked && q.locked)) {
+              dx /= d; dy /= d;
+              const pushP = p.locked ? 0 : (q.locked ? need - d : (need - d) / 2), pushQ = q.locked ? 0 : (p.locked ? need - d : (need - d) / 2);
+              p.x -= dx * pushP; p.y -= dy * pushP; q.x += dx * pushQ; q.y += dy * pushQ;
+            }
+          }
+          let dx = px, dy = py, d = Math.hypot(dx, dy) || 1, need = hubR + pr;
+          if (d < need && !p.locked) { p.x += dx / d * (need - d); p.y += dy / d * (need - d); }
+        }
+      }
+      // Final guarantee: while any two photos still intersect, spread the unlocked ones outward and re-check
+      for (let tries = 0; tries < 12; tries++) {
+        let clash = false;
+        const polys = photos.map(cornersOf);
+        for (let i = 0; i < photos.length && !clash; i++) for (let j = i + 1; j < photos.length; j++) if (polysOverlap(polys[i], polys[j])) { clash = true; break; }
+        if (!clash) break;
+        photos.forEach(p => { if (!p.locked) { p.x *= 1.12; p.y *= 1.12; } });
+      }
+      photos.forEach(p => { p.x = Math.round(p.x); p.y = Math.round(p.y); });
+      select(null); render(); fitView();
+    }
+    const modeBtn = $('mode');
+    modeBtn.addEventListener('click', () => {
+      viewing = !viewing;
+      document.body.classList.toggle('viewing', viewing);
+      modeBtn.textContent = viewing ? 'Edit' : 'View';
+      select(null); render();
+    });
+
+    // ----- Save / load / publish panel -----
+    const panel = $('panel'), pTitle = $('panel-title'), pText = $('panel-text'), pJson = $('panel-json'), pActions = $('panel-actions');
+    function openPanel(kind) {
+      pActions.innerHTML = ''; pJson.value = '';
+      const status = document.createElement('span'); status.className = 'status';
+      const btn = (label, cls, fn) => { const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls; b.addEventListener('click', () => fn(b)); pActions.appendChild(b); return b; };
+      const setStatus = t => { status.textContent = t; };
+      if (kind === 'save') {
+        pTitle.textContent = 'Save layout';
+        const mb = (JSON.stringify(getLayout()).length / 1048576).toFixed(1);
+        pText.textContent = `${photos.length} photo${photos.length === 1 ? '' : 's'}, about ${mb} MB. Save the layout file to reload this exact arrangement later; copy is a fallback if downloads are blocked.`;
+        pJson.style.display = 'none';
+        btn('Save file', 'primary', async b => { b.disabled = true; setStatus('Preparing…'); setStatus(await download(slug(title) + '-layout.json', JSON.stringify(getLayout()), 'application/json')); b.disabled = false; });
+        btn('Save as ZIP', '', async b => { b.disabled = true; setStatus('Compressing…'); const z = await makeZip([{ name: 'layout.json', text: JSON.stringify(getLayout()) }]); setStatus(await download(slug(title) + '-layout.zip', z, 'application/zip')); b.disabled = false; });
+        btn('Copy text', '', async b => { b.disabled = true; setStatus('Copying…'); try { await copyText(JSON.stringify(getLayout())); setStatus('Copied — paste it into a note or a .txt file'); } catch { setStatus('Copy was blocked by the browser; use Save file instead.'); } b.disabled = false; });
+      } else if (kind === 'load') {
+        pTitle.textContent = 'Load layout';
+        pText.textContent = 'Choose a saved layout file, or click in the box below and paste copied layout text (Ctrl+V). Either replaces what is currently on the page.';
+        pJson.placeholder = 'Paste layout text here';
+        pJson.value = '';
+        const lab = document.createElement('label'); lab.className = 'primary'; lab.tabIndex = 0; lab.textContent = 'Choose file';
+        const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'application/json,.json,application/zip,.zip';
+        inp.addEventListener('change', async () => {
+          const f = inp.files[0]; if (!f) return; setStatus('Reading…');
+          try {
+            if (/\.zip$/i.test(f.name) || f.type.includes('zip')) {
+              const entries = await readZip(await f.arrayBuffer());
+              const hit = entries.find(e => /\.json$/i.test(e.name));
+              if (!hit) { setStatus('No layout file (.json) found inside that zip.'); return; }
+              loadText(await hit.text());
+            } else loadText(await f.text());
+          } catch { setStatus('Could not read that file.'); }
+        });
+        lab.appendChild(inp); pActions.appendChild(lab);
+        btn('Load pasted text', '', () => loadText(pJson.value));
+        btn('Paste from clipboard', '', async () => {
+          try { loadText(await navigator.clipboard.readText()); }
+          catch { setStatus('Clipboard access was refused — click in the box and press Ctrl+V instead.'); pJson.focus(); }
+        });
+        setTimeout(() => pJson.focus(), 0);
+      } else if (kind === 'publish') {
+        pTitle.textContent = 'Publish & share';
+        const mb = (layoutJSON().length / 1048576).toFixed(1);
+        const qsel = document.createElement('select'); qsel.id = 'publish-quality';
+        qsel.innerHTML = '<option value="full">Photos: full quality (as stored)</option><option value="compact">Photos: compact (2000px, smaller file)</option>';
+        // Build a src map for the chosen quality; compact re-encodes copies, originals stay untouched
+        const srcForPublish = async () => {
+          if (qsel.value !== 'compact') return null;
+          const m = new Map();
+          for (const p of photos) m.set(p.id, await resample(p.src, 2000, 0.85));
+          return m;
+        };
+        pText.innerHTML = `<b>1.</b> Save the published page — a single file (about ${mb} MB) with your photos and both views built in, no editing tools.<br>` +
+          `<b>2.</b> Open Netlify Drop and drag that file onto it. You get a public link in a few seconds, with no account needed. ` +
+          `Sign in later (free) if you want the link to stay up permanently and to replace the page when you update the layout.<br>` +
+          `<span style="color:var(--ink-soft)">Or just send the file itself — it opens in any browser with everything inside. "Save as ZIP" packs the page as index.html inside a zip, which hosts such as Netlify Drop also accept directly. "GitHub project" unpacks it into index.html plus a photos/ folder of real image files, ready for a repository on GitHub Pages or Vercel (the README inside has the steps for both).</span>`;
+        pActions.appendChild(qsel);
+        const suffix = () => qsel.value === 'compact' ? '-compact' : '';
+        btn('Save published page', 'primary', async b => { b.disabled = true; setStatus('Preparing…'); setStatus(await download(slug(title) + suffix() + '.html', publishedHTML(await srcForPublish()), 'text/html')); b.disabled = false; });
+        btn('Save as ZIP', '', async b => { b.disabled = true; setStatus('Compressing…'); const z = await makeZip([{ name: 'index.html', text: publishedHTML(await srcForPublish()) }]); setStatus(await download(slug(title) + suffix() + '.zip', z, 'application/zip')); b.disabled = false; });
+        btn('Save as GitHub project (ZIP)', '', async b => { b.disabled = true; setStatus('Packing photos…'); setStatus(await download(slug(title) + '-site' + suffix() + '.zip', await projectZip(await srcForPublish()), 'application/zip')); b.disabled = false; });
+        btn('Open Netlify Drop', '', () => window.open('https://app.netlify.com/drop', '_blank', 'noopener'));
+        btn('Copy page HTML', '', async b => { b.disabled = true; try { await copyText(publishedHTML(await srcForPublish())); setStatus('Copied — paste into a new .html file'); } catch { setStatus('Copy was blocked; use Save instead.'); } b.disabled = false; });
+      }
+      pJson.style.display = kind === 'load' ? '' : 'none';
+      btn('Close', '', () => panel.classList.remove('open'));
+      pActions.appendChild(status);
+      panel.classList.add('open');
+    }
+    panel.addEventListener('click', e => { if (e.target === panel) panel.classList.remove('open'); });
+    function loadText(text) {
+      const status = pActions.querySelector('.status');
+      const say = t => { if (status) status.textContent = t; };
+      let t = (text || '').trim();
+      if (!t) { say('Nothing to load — paste the layout text first.'); return false; }
+      // Tolerate text that was wrapped in quotes or code fences by whatever it was stored in
+      t = t.replace(/^```[a-z]*\s*|\s*```$/g, '').replace(/^["'`]+|["'`]+$/g, '').trim();
+      let d;
+      try { d = JSON.parse(t); } catch { say('That text is not a saved layout (it may have been cut short when copied).'); return false; }
+      if (!d || !Array.isArray(d.photos)) { say('That text is not a saved layout.'); return false; }
+      pushHistory(); setLayout(d); panel.classList.remove('open');
+      toast(`Loaded ${d.photos.length} photo${d.photos.length === 1 ? '' : 's'}${d.title ? ' — ' + d.title : ''}`);
+      return true;
+    }
+    // Read a paste straight from the event so huge layouts never have to render inside the box
+    pJson.addEventListener('paste', e => {
+      const t = e.clipboardData && e.clipboardData.getData('text/plain');
+      if (t && t.length > 200000) { e.preventDefault(); loadText(t); }
+    });
+    $('undo').addEventListener('click', undo);
+    $('redo').addEventListener('click', redo);
+    updateHistoryButtons();
+    $('save').addEventListener('click', () => openPanel('save'));
+    $('load').addEventListener('click', () => openPanel('load'));
+    $('publish').addEventListener('click', () => openPanel('publish'));
+
+    // ----- Tiny ZIP support: enough to write one or more files and read a layout back out -----
+    const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+    function crc32(bytes) { let c = 0xFFFFFFFF; for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; }
+    async function deflate(bytes) {
+      if (!window.CompressionStream) return null;
+      try { return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer()); } catch { return null; }
+    }
+    async function inflate(bytes) {
+      return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+    }
+    async function makeZip(files) {
+      const enc = new TextEncoder(), parts = [], central = []; let offset = 0;
+      const dosTime = (() => { const d = new Date(); return { t: (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1), d: ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate() }; })();
+      const u16 = n => [n & 255, (n >> 8) & 255], u32 = n => [n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255];
+      for (const f of files) {
+        const name = enc.encode(f.name), data = f.bytes || enc.encode(f.text), crc = crc32(data);
+        const packed = await deflate(data); const useDeflate = packed && packed.length < data.length;
+        const body = useDeflate ? packed : data, method = useDeflate ? 8 : 0;
+        const head = new Uint8Array([...u32(0x04034b50), ...u16(20), ...u16(0x0800), ...u16(method), ...u16(dosTime.t), ...u16(dosTime.d), ...u32(crc), ...u32(body.length), ...u32(data.length), ...u16(name.length), ...u16(0), ...name]);
+        parts.push(head, body);
+        central.push(new Uint8Array([...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0x0800), ...u16(method), ...u16(dosTime.t), ...u16(dosTime.d), ...u32(crc), ...u32(body.length), ...u32(data.length), ...u16(name.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(offset), ...name]));
+        offset += head.length + body.length;
+      }
+      const cdSize = central.reduce((a, c) => a + c.length, 0);
+      const end = new Uint8Array([...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(cdSize), ...u32(offset), ...u16(0)]);
+      return new Blob([...parts, ...central, end], { type: 'application/zip' });
+    }
+    async function readZip(buf) {
+      const dv = new DataView(buf), bytes = new Uint8Array(buf), dec = new TextDecoder();
+      let eocd = buf.byteLength - 22; while (eocd >= 0 && dv.getUint32(eocd, true) !== 0x06054b50) eocd--;
+      if (eocd < 0) throw new Error('not a zip');
+      const count = dv.getUint16(eocd + 10, true); let pos = dv.getUint32(eocd + 16, true); const out = [];
+      for (let i = 0; i < count; i++) {
+        if (dv.getUint32(pos, true) !== 0x02014b50) break;
+        const method = dv.getUint16(pos + 10, true), csize = dv.getUint32(pos + 20, true), nlen = dv.getUint16(pos + 28, true), xlen = dv.getUint16(pos + 30, true), clen = dv.getUint16(pos + 32, true), lho = dv.getUint32(pos + 42, true);
+        const name = dec.decode(bytes.subarray(pos + 46, pos + 46 + nlen));
+        const dataStart = lho + 30 + dv.getUint16(lho + 26, true) + dv.getUint16(lho + 28, true);
+        const raw = bytes.subarray(dataStart, dataStart + csize);
+        out.push({ name, text: async () => dec.decode(method === 8 ? await inflate(raw) : raw) });
+        pos += 46 + nlen + xlen + clen;
+      }
+      return out;
+    }
+
+    function slug(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'portfolio'; }
+    // Prefer the browser's real Save dialog; fall back to a download link kept alive long enough for large files.
+    async function download(name, text, type) {
+      const blob = text instanceof Blob ? text : new Blob([text], { type });
+      if (window.showSaveFilePicker) {
+        try {
+          const ext = name.slice(name.lastIndexOf('.'));
+          const handle = await showSaveFilePicker({ suggestedName: name, types: [{ description: ext === '.html' ? 'Web page' : ext === '.zip' ? 'ZIP archive' : 'Layout file', accept: { [type]: [ext] } }] });
+          const w = await handle.createWritable(); await w.write(blob); await w.close();
+          return 'Saved';
+        } catch (err) { if (err && err.name === 'AbortError') return 'Cancelled'; }
+      }
+      try {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 120000);
+        return 'Download started — check your Downloads folder';
+      } catch { return 'Download blocked here. Use Copy instead.'; }
+    }
+    async function copyText(t) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try { await navigator.clipboard.writeText(t); return; } catch {}
+      }
+      // Fallback: the text must be in a visible, focused box for the browser to copy it
+      pJson.style.display = ''; pJson.value = t; pJson.focus(); pJson.select();
+      const ok = document.execCommand('copy');
+      pJson.value = ''; pJson.style.display = 'none';
+      if (!ok) throw new Error('copy failed');
+    }
+
+    // Build the published page from this page's own source: same CSS and script, data baked in, editing disabled.
+    function publishedHTML(srcMap) {
+      // Clone into a real Document so getElementById and friends work on the copy
+      const doc = document.implementation.createHTMLDocument('');
+      doc.replaceChild(doc.importNode(document.documentElement, true), doc.documentElement);
+      const b = doc.body;
+      b.className = 'published viewing';
+      ['stage', 'grid', 'web'].forEach(id => { doc.getElementById(id).innerHTML = ''; });
+      doc.getElementById('lightbox').classList.remove('open');
+      doc.querySelector('#lightbox figcaption').innerHTML = '';
+      doc.getElementById('world').removeAttribute('style');
+      doc.getElementById('viewport').classList.remove('panning');
+      doc.getElementById('sizer').classList.remove('show');
+      doc.getElementById('layer-list').innerHTML = '';
+      doc.getElementById('overlay').innerHTML = '';
+      b.classList.remove('layers-open');
+      doc.getElementById('theme').classList.remove('open');
+      doc.getElementById('shuffle-menu').classList.remove('open');
+      doc.getElementById('zone-svg').innerHTML = ''; doc.getElementById('zone-labels').innerHTML = ''; doc.getElementById('zone-handles').innerHTML = '';
+      doc.getElementById('marquee').classList.remove('show');
+      b.classList.remove('zone-draw');
+      b.classList.remove('bar-hidden');
+      doc.getElementById('panel').classList.remove('open');
+      doc.getElementById('panel-actions').innerHTML = '';
+      doc.querySelectorAll('[data-title]').forEach(h => { h.removeAttribute('contenteditable'); h.textContent = title; });
+      doc.querySelector('title').textContent = title;
+      let data = getLayout();
+      if (srcMap) data = { ...data, photos: data.photos.map(p => ({ ...p, src: srcMap.get(p.id) || p.src })) };
+      doc.getElementById('layout-data').textContent = JSON.stringify(data).replace(/</g, '\\u003c');
+      return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+    }
+
+    // GitHub-style project: index.html + photos/ folder with real image files + README
+    const dataURLBytes = src => { const b = atob(src.slice(src.indexOf(',') + 1)); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
+    async function projectZip(srcOverride) {
+      const files = [], srcMap = new Map(), used = new Set();
+      photos.forEach((p, i) => {
+        const src = (srcOverride && srcOverride.get(p.id)) || p.src;
+        const ext = src.startsWith('data:image/png') ? 'png' : 'jpg';
+        let base = slug(p.name || '') || 'photo-' + (i + 1); let name = base; let n = 2;
+        while (used.has(name)) name = base + '-' + n++;
+        used.add(name);
+        const path = `photos/${name}.${ext}`;
+        files.push({ name: path, bytes: dataURLBytes(src) });
+        srcMap.set(p.id, path);
+      });
+      files.unshift({ name: 'index.html', text: publishedHTML(srcMap) });
+      files.push({ name: '.nojekyll', text: '' }); // GitHub Pages: serve the files exactly as they are
+      files.push({ name: 'README.md', text: `# ${title}\n\nA photo portfolio site. Static files only — no build step, no dependencies.\n\n- \`index.html\` — the site (web view and grid view, no editing tools)\n- \`photos/\` — the images referenced by index.html\n\n## Put it on GitHub\n\n1. Create a new repository on GitHub (public if you want a free GitHub Pages site).\n2. Upload everything in this folder to the root of the repository — index.html, the photos folder, .nojekyll, and this README — and commit.\n\n### Option A — GitHub Pages\n\n3. Settings → Pages → *Build and deployment* → Source: **Deploy from a branch**, Branch: **main**, Folder: **/ (root)**. Save.\n4. After a minute the site is live at \`https://<your-username>.github.io/<repository-name>/\`.\n\n### Option B — Vercel\n\n3. At vercel.com, choose **Add New → Project** and import the repository.\n4. Leave the Framework Preset as **Other** and the build settings empty — there is nothing to build. Deploy.\n5. The site is live at \`https://<project-name>.vercel.app\`, and every push to the repository redeploys it automatically.\n\nYou can also skip GitHub entirely with the Vercel CLI: run \`npx vercel\` inside this folder.\n\n## Updating\n\nEdit the layout in the editor page, publish again as a GitHub project, and replace these files. Both GitHub Pages and Vercel pick up the change on the next commit.\n` });
+      return makeZip(files);
+    }
+  }
+
+  // ---------- Boot ----------
+  const baked = $('layout-data').textContent.trim();
+  if (baked) { try { setLayout(JSON.parse(baked)); } catch { applyTheme(); render(); } }
+  else { applyTheme(); render(); }
+  if (PUBLISHED) { document.body.classList.add('viewing'); render(); fitView(); addEventListener('resize', () => { if (!gridView) fitView(); }); }
+})();
+</script>
+</body>
+</html>
